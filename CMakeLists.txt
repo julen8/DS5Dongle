@@ -56,7 +56,10 @@ target_include_directories(wdl_resampler PUBLIC
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
 target_compile_options(ds5-bridge PRIVATE -fsigned-char)
-target_compile_definitions(ds5-bridge PRIVATE CYW43_LWIP=0)
+target_compile_definitions(ds5-bridge PRIVATE
+        CYW43_LWIP=0
+        PICO_FLASH_ASSUME_CORE1_SAFE=1
+)
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
 pico_set_program_version(ds5-bridge "0.1")

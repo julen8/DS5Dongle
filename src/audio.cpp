@@ -22,7 +22,7 @@ void audio_loop() {
     // 1. 读取 USB 音频数据
     if (!tud_audio_available()) return;
 
-    int16_t raw[1024];
+    int16_t raw[1024]; // 48000 / 3000 = 16, 64 * 16 = 1024
     uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
     int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
     if (frames == 0){

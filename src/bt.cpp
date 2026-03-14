@@ -16,7 +16,7 @@
 #include "pico/cyw43_arch.h"
 #include "pico/stdio.h"
 #include "utils.h"
-#include "pico/multicore.h"
+#include "bsp/board_api.h"
 #include "pico/sync.h"
 #include "classic/sdp_server.h"
 
@@ -238,9 +238,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             printf("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
                 printf("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
-                multicore_lockout_start_blocking();
                 gap_drop_link_key_for_bd_addr(current_device_addr);
-                multicore_lockout_end_blocking();
                 // gap_inquiry_start(30);
             } else {
                 hci_send_cmd(&hci_set_connection_encryption, handle, 1);
