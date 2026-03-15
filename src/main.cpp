@@ -7,9 +7,9 @@
 #include "usb.h"
 #include "bt.h"
 #include "utils.h"
-#include "pico/multicore.h"
 #include "resample.h"
 #include "audio.h"
+#include "pico/cyw43_arch.h"
 
 int reportSeqCounter = 0;
 uint8_t packetCounter = 0;
@@ -53,12 +53,12 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     (void) buffer;
     (void) reqlen;
 
-    uint8_t *feature_data = get_feature_data(report_id, reqlen);
-    if (feature_data) {
-        memcpy(buffer, feature_data, reqlen);
+    std::vector<uint8_t> feature_data = get_feature_data(report_id, reqlen);
+    if (!feature_data.empty()) {
+        memcpy(buffer, feature_data.data() + 1, feature_data.size() - 1);
     }
 
-    return feature_data ? reqlen : 0;
+    return feature_data.empty() ? 0 : feature_data.size() - 1;
 }
 
 // Invoked when received SET_REPORT control request or
@@ -104,6 +104,7 @@ int main() {
     audio_init();
 
     while (1) {
+        cyw43_arch_poll();
         tud_task();
         audio_loop();
         interrupt_loop();

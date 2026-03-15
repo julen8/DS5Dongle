@@ -443,16 +443,16 @@ void bt_write(uint8_t *data, uint16_t len) {
     }
 }
 
-uint8_t *get_feature_data(uint8_t reportId, uint16_t len) {
+std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     if (feature_data.find(reportId) == feature_data.end() || feature_data[reportId].empty()) {
         if (hid_control_cid != 0) {
             uint8_t get_feature[] = {0x43, reportId};
             l2cap_send(hid_control_cid, get_feature, len);
             printf("[L2CAP] Requesting Feature Report 0x%02X\n", reportId);
         }
-        return 0;
+        return {};
     }
-    return feature_data[reportId].data();
+    return feature_data[reportId];
 }
 
 void init_feature() {

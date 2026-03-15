@@ -88,7 +88,8 @@ target_link_libraries(ds5-bridge
         hardware_interp
         hardware_timer
         pico_btstack_classic
-        pico_cyw43_arch_threadsafe_background
+#        pico_cyw43_arch_threadsafe_background
+        pico_cyw43_arch_poll
         pico_btstack_cyw43
         tinyusb_device
         tinyusb_board
