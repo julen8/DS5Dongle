@@ -1,0 +1,170 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  PICO_SDK_VERSION: '2.2.0'
+  TINYUSB_VERSION: '0.20.0'
+  NINJA_VERSION: '1.11.1'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    strategy:
+      matrix:
+        include:
+          - board: "pico2_w"
+            description: "Pico 2W"
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Cache build dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            /tmp/arm-none-eabi-cache
+            pico-sdk
+          key: ${{ runner.os }}-pico-${{ env.PICO_SDK_VERSION }}-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pico-${{ env.PICO_SDK_VERSION }}-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            git cmake ninja-build python3 python3-pip gcc g++ \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib binutils-arm-none-eabi \
+            ca-certificates gawk
+
+      - name: Set up Pico SDK
+        run: |
+          PICO_SDK_DIR="./pico-sdk"
+          
+          # Clone SDK if not cached
+          if [ ! -f "${PICO_SDK_DIR}/pico_sdk_version.cmake" ]; then
+            echo "Cloning Pico SDK v${PICO_SDK_VERSION}..."
+            git clone --depth 1 --branch "${PICO_SDK_VERSION}" \
+              https://github.com/raspberrypi/pico-sdk.git "${PICO_SDK_DIR}"
+          else
+            echo "Using cached Pico SDK"
+          fi
+          
+          # Initialize SDK submodules
+          for mod in btstack cyw43-driver lwip mbedtls tinyusb; do
+            MOD_PATH="${PICO_SDK_DIR}/lib/${mod}"
+            if [ -z "$(ls -A ${MOD_PATH} 2>/dev/null)" ]; then
+              echo "Initializing submodule: ${mod}..."
+              git -C "${PICO_SDK_DIR}" submodule update --init --depth 1 "lib/${mod}"
+            else
+              echo "Submodule ${mod} already initialized"
+            fi
+          done
+          
+          # Upgrade TinyUSB
+          CURRENT_VERSION=$(git -C "${PICO_SDK_DIR}/lib/tinyusb" describe --tags 2>/dev/null || echo "unknown")
+          echo "Current TinyUSB version: ${CURRENT_VERSION}"
+          if [ "${CURRENT_VERSION}" != "${TINYUSB_VERSION}" ]; then
+            echo "Upgrading TinyUSB to ${TINYUSB_VERSION}..."
+            git -C "${PICO_SDK_DIR}/lib/tinyusb" fetch --depth 1 origin tag "${TINYUSB_VERSION}"
+            git -C "${PICO_SDK_DIR}/lib/tinyusb" checkout "${TINYUSB_VERSION}"
+            echo "TinyUSB upgraded successfully"
+          fi
+
+      - name: Build project
+        run: |
+          mkdir -p build
+          cd build
+          export PICO_SDK_PATH="${PWD}/../pico-sdk"
+          cmake .. -G Ninja \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DPICO_BOARD=${{ matrix.board }}
+          ninja
+          
+          echo "Build completed successfully"
+          ls -lh ds5-bridge.* 2>/dev/null || echo "No build artifacts found"
+
+      - name: List build artifacts
+        if: always()
+        run: |
+          echo "=== Build Artifacts ==="
+          ls -lh build/ds5-bridge.* 2>/dev/null || echo "No artifacts"
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ds5-bridge-${{ matrix.board }}
+          path: |
+            build/ds5-bridge.uf2
+            build/ds5-bridge.elf
+            build/compile_commands.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') && success()
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            build/ds5-bridge.uf2
+            build/ds5-bridge.elf
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          body: |
+            ## Build Information
+            - **Board**: ${{ matrix.board }}
+            - **Pico SDK Version**: ${{ env.PICO_SDK_VERSION }}
+            - **TinyUSB Version**: ${{ env.TINYUSB_VERSION }}
+            
+            ## Flash Instructions
+            1. Press BOOTSEL button on Pico board
+            2. Connect to USB while holding BOOTSEL
+            3. Drag & drop `ds5-bridge.uf2` to the mounted RPI-RP2 drive
+            
+            ## Files
+            - `ds5-bridge.uf2` - Ready to flash firmware
+            - `ds5-bridge.elf` - Debug symbols and full binary
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate job summary
+        if: always()
+        run: |
+          echo "## 🔨 Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Board**: pico2_w" >> $GITHUB_STEP_SUMMARY
+          echo "- **SDK Version**: ${{ env.PICO_SDK_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **TinyUSB Version**: ${{ env.TINYUSB_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "build/ds5-bridge.uf2" ]; then
+            echo "### ✅ Build Status" >> $GITHUB_STEP_SUMMARY
+            echo "**Success** - Firmware generated" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+            ls -lh build/ds5-bridge.* | awk '{print "- `" $9 "` - " $5}' >> $GITHUB_STEP_SUMMARY || true
+          else
+            echo "### ❌ Build Status" >> $GITHUB_STEP_SUMMARY
+            echo "**Failed** - Firmware not generated" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,99 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up build environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            git cmake ninja-build python3 gcc g++ \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib binutils-arm-none-eabi \
+            ca-certificates
+
+      - name: Clone Pico SDK
+        run: |
+          PICO_SDK_DIR="./pico-sdk"
+          if [ ! -f "${PICO_SDK_DIR}/pico_sdk_version.cmake" ]; then
+            git clone --depth 1 --branch 2.2.0 \
+              https://github.com/raspberrypi/pico-sdk.git "${PICO_SDK_DIR}"
+          fi
+
+      - name: Initialize SDK submodules
+        run: |
+          PICO_SDK_DIR="./pico-sdk"
+          for mod in btstack cyw43-driver lwip mbedtls tinyusb; do
+            if [ -z "$(ls -A ${PICO_SDK_DIR}/lib/${mod} 2>/dev/null)" ]; then
+              git -C "${PICO_SDK_DIR}" submodule update --init --depth 1 "lib/${mod}"
+            fi
+          done
+
+      - name: Upgrade TinyUSB
+        run: |
+          PICO_SDK_DIR="./pico-sdk"
+          git -C "${PICO_SDK_DIR}/lib/tinyusb" fetch --depth 1 origin tag 0.20.0
+          git -C "${PICO_SDK_DIR}/lib/tinyusb" checkout 0.20.0
+
+      - name: Build project
+        run: |
+          mkdir -p build
+          cd build
+          export PICO_SDK_PATH="${PWD}/../pico-sdk"
+          cmake .. -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          ninja
+
+      - name: Upload artifacts (on every build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ds5-bridge-build
+          path: |
+            build/ds5-bridge.uf2
+            build/ds5-bridge.elf
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            build/ds5-bridge.uf2
+            build/ds5-bridge.elf
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f "build/ds5-bridge.uf2" ]; then
+            echo "✅ Build artifacts:" >> $GITHUB_STEP_SUMMARY
+            ls -lh build/ds5-bridge.* >> $GITHUB_STEP_SUMMARY || true
+          else
+            echo "❌ Build artifacts not found" >> $GITHUB_STEP_SUMMARY
+          fi
