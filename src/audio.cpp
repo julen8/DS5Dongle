@@ -24,14 +24,14 @@
 
 // 真实发送的音频数据字节数，只要填充到这个数值就打包发送，剩余部分填0。可能能降低延迟，过小可能导致蓝牙发包过多
 // 最好是 (READ_FRAMES/16) 的倍数以配合重采样率，避免出现过多小余量包。
-#define REAL_SAMPLE_SIZE  40
+// 实际测试调小会影响震动质量
+#define REAL_SAMPLE_SIZE  64
 
 #define REPORT_SIZE       142
 #define REPORT_ID         0x32
 // BUFFER_LENGTH: 告知 DS5 控制器的目标缓冲深度。
-// 值越小控制器侧延迟越低，代价是在 BT 传输抖动时可能出现轻微断续。
-// 原始值 55，已调低以减少控制器侧缓冲延迟。可在 5~20 之间调试。
-#define BUFFER_LENGTH     10
+// 值越小控制器侧延迟越低，代价是震动质量会下降
+#define BUFFER_LENGTH     16
 
 static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
