@@ -25,6 +25,7 @@
 
 #include "bsp/board_api.h"
 #include "tusb.h"
+#include "usb_descriptors.h"
 
 //--------------------------------------------------------------------+
 // Device Descriptors
@@ -33,7 +34,7 @@ static tusb_desc_device_t const desc_device =
 {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
-    .bcdUSB = 0x0200,
+    .bcdUSB = 0x0210, // at least 2.1 or 3.x for BOS & webUSB
 
     // Use Interface Association Descriptor (IAD) for Audio
     // As required by USB Specs IAD's subclass must be common class (2) and protocol must be IAD (1)
@@ -73,14 +74,25 @@ uint8_t const *tud_descriptor_device_cb(void) {
 
 uint8_t const descriptor_configuration[] = {
     // --- CONFIGURATION DESCRIPTOR ---
-    0x09, // bLength
-    0x02, // bDescriptorType (CONFIGURATION)
-    0xE3, 0x00, // wTotalLength: 227
-    0x04, // bNumInterfaces: 4
-    0x01, // bConfigurationValue: 1
-    0x00, // iConfiguration: 0
-    0xC0, // bmAttributes: SELF-POWERED, NO REMOTE-WAKEUP
-    0xFA, // bMaxPower: 500mA (250 * 2mA)
+    TUD_CONFIG_DESCRIPTOR(1,5,0,227 + TUD_VENDOR_DESC_LEN,0xC0,500),
+    // 0x09, // bLength
+    // 0x02, // bDescriptorType (CONFIGURATION)
+    // 0xE3, 0x00, // wTotalLength: 227
+    // 0x04, // bNumInterfaces: 4
+    // 0x01, // bConfigurationValue: 1
+    // 0x00, // iConfiguration: 0
+    // 0xC0, // bmAttributes: SELF-POWERED, NO REMOTE-WAKEUP
+    // 0xFA, // bMaxPower: 500mA (250 * 2mA)
+
+    // // --- INTERFACE ASSOCIATION DESCRIPTOR (IAD): Audio ---
+    // 0x08, // bLength
+    // 0x0B, // bDescriptorType: Interface Association (0x0B)
+    // 0x00, // bFirstInterface: 0 (从第0个接口开始)
+    // 0x03, // bInterfaceCount: 3 (控制0 + 播放1 + 录音2)
+    // 0x01, // bFunctionClass: Audio (0x01)
+    // 0x00, // bFunctionSubClass: Undefined (对于 UAC1，这里通常填0)
+    // 0x00, // bFunctionProtocol: 0x00
+    // 0x00, // iInterface
 
     // --- INTERFACE DESCRIPTOR (0.0): Audio Control ---
     0x09, // bLength
@@ -322,6 +334,8 @@ uint8_t const descriptor_configuration[] = {
     0x03, // bmAttributes: Interrupt
     0x40, 0x00, // wMaxPacketSize: 64
     0x06, // bInterval: 6
+
+    TUD_VENDOR_DESCRIPTOR(4,0,0x05,0x86,64)
 };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
@@ -482,6 +496,74 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
     (void) itf;
     return desc_hid_report;
 }
+
+//--------------------------------------------------------------------+
+// BOS Descriptor
+//--------------------------------------------------------------------+
+
+/* Microsoft OS 2.0 registry property descriptor
+Per MS requirements https://msdn.microsoft.com/en-us/library/windows/hardware/hh450799(v=vs.85).aspx
+device should create DeviceInterfaceGUIDs. It can be done by driver and
+in case of real PnP solution device should expose MS "Microsoft OS 2.0
+registry property descriptor". Such descriptor can insert any record
+into Windows registry per device/configuration/interface. In our case it
+will insert "DeviceInterfaceGUIDs" multistring property.
+
+GUID is freshly generated and should be OK to use.
+
+https://developers.google.com/web/fundamentals/native-hardware/build-for-webusb/
+(Section Microsoft OS compatibility descriptors)
+*/
+
+#define BOS_TOTAL_LEN      (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
+
+#define MS_OS_20_DESC_LEN  0xB2
+
+// BOS Descriptor is required for webUSB
+uint8_t const desc_bos[] =
+{
+  // total length, number of device caps
+  TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+
+  // Microsoft OS 2.0 descriptor
+  TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, 1)
+};
+
+uint8_t const * tud_descriptor_bos_cb(void)
+{
+  return desc_bos;
+}
+
+
+uint8_t const desc_ms_os_20[] =
+{
+  // Set header: length, type, windows version, total length
+  U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR), U32_TO_U8S_LE(0x06030000), U16_TO_U8S_LE(MS_OS_20_DESC_LEN),
+
+  // Configuration subset header: length, type, configuration index, reserved, configuration total length
+  U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION), 0, 0, U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A),
+
+  // Function Subset header: length, type, first interface, reserved, subset length
+  U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION), 4, 0, U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A-0x08),
+
+  // MS OS 2.0 Compatible ID descriptor: length, type, compatible ID, sub compatible ID
+  U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID), 'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sub-compatible
+
+  // MS OS 2.0 Registry property descriptor: length, type
+  U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A-0x08-0x08-0x14), U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
+  U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A), // wPropertyDataType, wPropertyNameLength and PropertyName "DeviceInterfaceGUIDs\0" in UTF-16
+  'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00, 'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
+  'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00, 'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00, 0x00, 0x00,
+  U16_TO_U8S_LE(0x0050), // wPropertyDataLength
+	//bPropertyData: “{C56E515F-CAC1-47C7-A802-0D6FD5D5345E}”.
+    '{', 0x00, 'C', 0x00, '5', 0x00, '6', 0x00, 'E', 0x00, '5', 0x00, '1', 0x00, '5', 0x00, 'F', 0x00, '-', 0x00,
+    'C', 0x00, 'A', 0x00, 'C', 0x00, '1', 0x00, '-', 0x00, '4', 0x00, '7', 0x00, 'C', 0x00, '7', 0x00, '-', 0x00,
+    'A', 0x00, '8', 0x00, '0', 0x00, '2', 0x00, '-', 0x00, '0', 0x00, 'D', 0x00, '6', 0x00, 'F', 0x00, 'D', 0x00,
+    '5', 0x00, 'D', 0x00, '5', 0x00, '3', 0x00, '4', 0x00, '5', 0x00, 'E', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "Incorrect size");
 
 //--------------------------------------------------------------------+
 // String Descriptors

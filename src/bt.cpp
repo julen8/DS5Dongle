@@ -369,13 +369,13 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
                     init_feature();
                     // 初始化手柄状态
-                    uint8_t report32[142];
+                    uint8_t report32[142] = {};
                     report32[0] = 0x32;
                     report32[1] = 0x10; // reportSeqCounter
                     uint8_t packet_0x10[] =
                     {
-                        0x90, // Packet: 0x10
-                        0x3f, // 63
+                        0x10 | 0 << 6 | 1 << 7, // Packet: 0x10
+                        63, // DS:47 DSE:63
                         // SetStateData
                         0xfd, 0xf7, 0x0, 0x0,
                         0x7f, 0x7f, // Headphones, Speaker
@@ -459,9 +459,7 @@ void bt_write(uint8_t *data, uint16_t len) {
     memcpy(packet.data() + 1, data, len);
     fill_output_report_checksum(packet.data() + 1, len);
 
-    critical_section_enter_blocking(&queue_lock);
-    send_queue.push(std::move(packet)); // 使用 std::move 避免深拷贝
-    critical_section_exit(&queue_lock);
+    send_queue.push(packet);
 
     if (hid_interrupt_cid == 0) {
         printf("[L2CAP bt_write] Warning: hid_interrupt_cid 0");
@@ -485,7 +483,8 @@ std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
 }
 
 void init_feature() {
-    get_feature_data(0x09, 20);
-    get_feature_data(0x20, 64);
-    get_feature_data(0x05, 41);
+    get_feature_data(0x09, 20); // Get Controller and Host MAC
+    get_feature_data(0x20, 64); // Get Controller Version/Date (Firmware Info)
+    get_feature_data(0x22, 64); // Get Hardware Info
+    get_feature_data(0x05, 41); // Get Calibration
 }

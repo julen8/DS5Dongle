@@ -4,6 +4,8 @@
 
 #include "tusb.h"
 #include "bsp/board_api.h"
+#include "usb.h"
+#include "usb_descriptors.h"
 
 uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
 int16_t volume[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
@@ -161,4 +163,40 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
     (void) instance;
     (void) len;
+}
+
+//--------------------------------------------------------------------+
+// Vendor class
+//--------------------------------------------------------------------+
+// Invoked when a control transfer occurred on an interface of this class
+// Driver response accordingly to the request and the transfer stage (setup/data/ack)
+// return false to stall control endpoint (e.g unsupported request)
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+    // nothing to with DATA & ACK stage
+    if (stage != CONTROL_STAGE_SETUP) {
+        return true;
+    }
+
+    switch (request->bmRequestType_bit.type) {
+        case TUSB_REQ_TYPE_VENDOR:
+            switch (request->bRequest) {
+                case 1: {
+                    if (request->wIndex == 7) {
+                        // Get Microsoft OS 2.0 compatible descriptor
+                        uint16_t total_len;
+                        memcpy(&total_len, desc_ms_os_20 + 8, 2);
+
+                        return tud_control_xfer(rhport, request, (void *) (uintptr_t) desc_ms_os_20, total_len);
+                    }
+                    return false;
+                }
+
+                default: break;
+            }
+            break;
+        default: break;
+    }
+
+    // stall unknown request
+    return false;
 }

@@ -25,7 +25,7 @@ void audio_loop() {
     // 1. 读取 USB 音频数据
     if (!tud_audio_available()) return;
 
-    int16_t raw[192]; // 48000 / 3000 = 16, 64 * 16 = 1024
+    static int16_t raw[192];
     uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
     int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
     if (frames == 0){
@@ -33,7 +33,7 @@ void audio_loop() {
     }
 
     // 2. 从4ch中提取ch3/ch4，转换为float输入重采样器
-    WDL_ResampleSample *in_buf;
+    static WDL_ResampleSample *in_buf;
     int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
 
     for (int i = 0; i < nframes; i++) {
@@ -42,7 +42,7 @@ void audio_loop() {
     }
 
     // 3. 48kHz -> 3kHz 重采样
-    WDL_ResampleSample out_buf[SAMPLE_SIZE];  // 64 floats = 32帧 × 2ch
+    static WDL_ResampleSample out_buf[SAMPLE_SIZE];  // 64 floats = 32帧 × 2ch
     int out_frames = resampler.ResampleOut(out_buf, nframes, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
 
     static int8_t haptic_buf[SAMPLE_SIZE];
@@ -58,11 +58,11 @@ void audio_loop() {
         if (haptic_buf_pos != SAMPLE_SIZE) {
             continue;
         }
-        uint8_t pkt[REPORT_SIZE] = {};
+        static uint8_t pkt[REPORT_SIZE] = {};
         pkt[0] = REPORT_ID;
         pkt[1] = reportSeqCounter << 4;
         reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
-        pkt[2] = 0x11 | (1 << 7);
+        pkt[2] = 0x11 | 0 << 6 | 1 << 7;
         pkt[3] = 7;
         pkt[4] = 0b11111110;
         pkt[5] = BUFFER_LENGTH;
@@ -71,13 +71,34 @@ void audio_loop() {
         pkt[8] = BUFFER_LENGTH;
         pkt[9] = BUFFER_LENGTH; // buffer length
         pkt[10] = packetCounter++;
-        pkt[11] = 0x12 | (1 << 7);
+        pkt[11] = 0x12 | 0 << 6 | 1 << 7;
         pkt[12] = SAMPLE_SIZE;
         memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
 
         bt_write(pkt, sizeof(pkt));
         haptic_buf_pos = 0;
     }
+}
+
+void send_speaker(const uint8_t* data) {
+    static uint8_t pkt[270] = {};
+    pkt[0] = 0x34;
+    pkt[1] = reportSeqCounter << 4;
+    reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+    pkt[2] = 0x11 | 0 << 6 | 1 << 7;
+    pkt[3] = 7;
+    pkt[4] = 0b11111110;
+    pkt[5] = BUFFER_LENGTH;
+    pkt[6] = BUFFER_LENGTH;
+    pkt[7] = BUFFER_LENGTH;
+    pkt[8] = BUFFER_LENGTH;
+    pkt[9] = BUFFER_LENGTH; // buffer length
+    pkt[10] = packetCounter++;
+    pkt[11] = 0x16 | 0 << 6 | 1 << 7; // Speaker: 0x13 Headset: 0x16
+    pkt[12] = 200;
+    memcpy(pkt + 13, data, 200);
+
+    bt_write(pkt, sizeof(pkt));
 }
 
 void audio_init() {

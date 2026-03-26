@@ -8,7 +8,9 @@
 #include "utils.h"
 #include "resample.h"
 #include "audio.h"
+#include "hardware/clocks.h"
 #include "pico/cyw43_arch.h"
+#include "pico/multicore.h"
 
 int reportSeqCounter = 0;
 uint8_t packetCounter = 0;
@@ -51,7 +53,7 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
 
     std::vector<uint8_t> feature_data = get_feature_data(report_id, reqlen);
     if (!feature_data.empty()) {
-        memcpy(buffer, feature_data.data() + 1, feature_data.size() - 1);
+        memcpy(buffer, feature_data.data() + 1, feature_data.size() - 1 - 4);
     }
 
     return feature_data.empty() ? 0 : feature_data.size() - 1;
@@ -69,7 +71,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 
     switch (buffer[0]) {
         case 0x02: {
-            uint8_t outputData[78];
+            uint8_t outputData[78] = {};
             outputData[0] = 0x31;
             outputData[1] = reportSeqCounter << 4;
             if (++reportSeqCounter == 256) {
@@ -81,6 +83,43 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
             break;
         }
     }
+}
+
+bool block = true;
+
+void core1_entry() {
+    if (!tud_vendor_available()) {
+        return;
+    }
+    uint8_t buf[64];
+    static uint8_t data[204];
+    static int pos = 0;
+    const uint32_t count = tud_vendor_read(buf, sizeof(buf));
+    if (block) {
+        if (buf[0] != 0xf4) {
+            return;
+        }
+        block = false;
+    }
+
+    if (pos + count > 204) {
+        pos = 0;
+        block = true;
+        return;
+    }
+    memcpy(data + pos,buf,count);
+    pos += count;
+    if (pos < 204) {
+        return;
+    }
+
+    const uint32_t crc = crc32(data,200);
+    if (memcmp(data + 200,&crc,4) == 0) {
+        send_speaker(data);
+    }else {
+        block = true;
+    }
+    pos = 0;
 }
 
 int main() {
@@ -104,5 +143,6 @@ int main() {
         tud_task();
         audio_loop();
         interrupt_loop();
+        // core1_entry();
     }
 }
