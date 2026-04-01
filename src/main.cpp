@@ -85,43 +85,6 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     }
 }
 
-bool block = true;
-
-void core1_entry() {
-    if (!tud_vendor_available()) {
-        return;
-    }
-    uint8_t buf[64];
-    static uint8_t data[204];
-    static int pos = 0;
-    const uint32_t count = tud_vendor_read(buf, sizeof(buf));
-    if (block) {
-        if (buf[0] != 0xf4) {
-            return;
-        }
-        block = false;
-    }
-
-    if (pos + count > 204) {
-        pos = 0;
-        block = true;
-        return;
-    }
-    memcpy(data + pos,buf,count);
-    pos += count;
-    if (pos < 204) {
-        return;
-    }
-
-    const uint32_t crc = crc32(data,200);
-    if (memcmp(data + 200,&crc,4) == 0) {
-        send_speaker(data);
-    }else {
-        block = true;
-    }
-    pos = 0;
-}
-
 int main() {
     board_init();
 
@@ -141,9 +104,9 @@ int main() {
     while (1) {
         cyw43_arch_poll();
         tud_task();
+        // vendor_loop();
         audio_loop();
         interrupt_loop();
-        core1_entry();
         // TODO:
         // 把蓝牙的工作移到 core1
         // core0 专注usb

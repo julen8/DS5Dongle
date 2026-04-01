@@ -9,5 +9,8 @@
 void audio_init();
 void audio_loop();
 void send_speaker(const uint8_t *data);
+void send_combine(const uint8_t* speaker,const int8_t* haptics);
+void send_haptics(const int8_t* data);
+void vendor_loop();
 
 #endif //DS5_BRIDGE_AUDIO_H

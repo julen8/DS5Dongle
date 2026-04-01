@@ -15,11 +15,13 @@
 #define REPORT_SIZE       142
 #define REPORT_ID         0x32
 // #define VOLUME_GAIN       2
-#define BUFFER_LENGTH     55
+#define BUFFER_LENGTH     48
 
 static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
+static uint8_t speaker_buf[256];
+static bool speaker_send = true;
 
 void audio_loop() {
     // 1. 读取 USB 音频数据
@@ -52,32 +54,43 @@ void audio_loop() {
     for (int i = 0; i < out_frames; i++) {
         int val_l = (int) (out_buf[i * 2] * 127.0f * (volume[0] ?: 1));
         int val_r = (int) (out_buf[i * 2 + 1] * 127.0f * (volume[0] ?: 1));
-        haptic_buf[haptic_buf_pos++] = (int8_t) std::clamp(val_l, -128, 127); // 似乎clamp有点多余？还是以防万一吧
+        haptic_buf[haptic_buf_pos++] = (int8_t) std::clamp(val_l, -128, 127);
         haptic_buf[haptic_buf_pos++] = (int8_t) std::clamp(val_r, -128, 127);
 
         if (haptic_buf_pos != SAMPLE_SIZE) {
             continue;
         }
-        static uint8_t pkt[REPORT_SIZE] = {};
-        pkt[0] = REPORT_ID;
-        pkt[1] = reportSeqCounter << 4;
-        reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
-        pkt[2] = 0x11 | 0 << 6 | 1 << 7;
-        pkt[3] = 7;
-        pkt[4] = 0b11111110;
-        pkt[5] = BUFFER_LENGTH;
-        pkt[6] = BUFFER_LENGTH;
-        pkt[7] = BUFFER_LENGTH;
-        pkt[8] = BUFFER_LENGTH;
-        pkt[9] = BUFFER_LENGTH; // buffer length
-        pkt[10] = packetCounter++;
-        pkt[11] = 0x12 | 0 << 6 | 1 << 7;
-        pkt[12] = SAMPLE_SIZE;
-        memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
-
-        bt_write(pkt, sizeof(pkt));
+        if (speaker_send) {
+            send_combine(speaker_buf,haptic_buf);
+            speaker_send = false;
+        }else {
+            send_haptics(haptic_buf);
+        }
+        // send_combine(speaker_buf,haptic_buf);
         haptic_buf_pos = 0;
     }
+}
+
+void send_haptics(const int8_t* data) {
+    static uint8_t pkt[REPORT_SIZE] = {};
+    pkt[0] = REPORT_ID;
+    pkt[1] = reportSeqCounter << 4;
+    reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+    pkt[2] = 0x11 | 0 << 6 | 1 << 7;
+    pkt[3] = 7;
+    pkt[4] = 0b11111110;
+    pkt[5] = BUFFER_LENGTH;
+    pkt[6] = BUFFER_LENGTH;
+    pkt[7] = BUFFER_LENGTH;
+    pkt[8] = BUFFER_LENGTH;
+    pkt[9] = BUFFER_LENGTH; // buffer length
+    pkt[10] = packetCounter++;
+
+    pkt[11] = 0x12 | 0 << 6 | 1 << 7;
+    pkt[12] = SAMPLE_SIZE;
+    memcpy(pkt + 13, data, SAMPLE_SIZE);
+
+    bt_write(pkt, sizeof(pkt));
 }
 
 void send_speaker(const uint8_t* data) {
@@ -101,9 +114,71 @@ void send_speaker(const uint8_t* data) {
     bt_write(pkt, sizeof(pkt));
 }
 
+// 当前扬声器的逻辑是：扬声器要480frames，震动是512frames (32 * 16)，所以扬声器会先完成编码。
+// 将编码完成的数据进行存储，在震动的时候一起发送出去。
+// 正好也在之前HeadsetPlayMusic的Demo里面，10.666ms的周期发送才播放正常，而这个值也是震动的发送周期时间，具体计算请看SAXense
+void send_combine(const uint8_t* speaker,const int8_t* haptics) {
+    static uint8_t pkt[334] = {};
+    pkt[0] = 0x35;
+    pkt[1] = reportSeqCounter << 4;
+    reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+    pkt[2] = 0x11 | 0 << 6 | 1 << 7;
+    pkt[3] = 7;
+    pkt[4] = 0b11111110;
+    pkt[5] = BUFFER_LENGTH;
+    pkt[6] = BUFFER_LENGTH;
+    pkt[7] = BUFFER_LENGTH;
+    pkt[8] = BUFFER_LENGTH;
+    pkt[9] = BUFFER_LENGTH; // buffer length
+    pkt[10] = packetCounter++;
+    pkt[11] = 0x13 | 0 << 6 | 1 << 7; // Speaker: 0x13 Headset: 0x16
+    pkt[12] = 200;
+    memcpy(pkt + 13, speaker, 200);
+    pkt[213] = 0x12 | 0 << 6 | 1 << 7;
+    pkt[214] = 64;
+    memcpy(pkt + 215,haptics,64);
+    bt_write(pkt, sizeof(pkt));
+}
+
 void audio_init() {
     resampler.SetMode(true, 0, false);
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 480, 32);
+}
+
+void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
+    (void)idx;
+    (void)buffer;
+    (void)bufsize;
+
+    static int speaker_buf_pos = 0;
+    static uint8_t buf[64];
+    static uint8_t save[256];
+    const uint32_t count = tud_vendor_read(buf,sizeof(buf));
+    memcpy(save + speaker_buf_pos,buf,count);
+    speaker_buf_pos += count;
+    if (count == 12) {
+        memcpy(speaker_buf,save,200);
+        speaker_buf_pos = 0;
+        speaker_send = true;
+    }
+}
+
+// 未启用，备用
+void vendor_loop() {
+    if (!tud_vendor_available()) {
+        return;
+    }
+    static int speaker_buf_pos = 0;
+    static uint8_t buf[64];
+    static uint8_t save[256];
+    const uint32_t count = tud_vendor_read(buf,sizeof(buf));
+    memcpy(save + speaker_buf_pos,buf,count);
+    speaker_buf_pos += count;
+    if (count == 12) {
+        memcpy(speaker_buf,save,200);
+        speaker_buf_pos = 0;
+        speaker_send = true;
+    }
 }
