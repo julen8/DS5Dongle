@@ -364,6 +364,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     if (!mute[0]) {
                         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
                     }
+                    inactive_time = time_us_32();
 
                     printf("Init DualSense\n");
 

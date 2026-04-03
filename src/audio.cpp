@@ -66,7 +66,6 @@ void audio_loop() {
         }else {
             send_haptics(haptic_buf);
         }
-        // send_combine(speaker_buf,haptic_buf);
         haptic_buf_pos = 0;
     }
 }
@@ -155,7 +154,21 @@ void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
     static int speaker_buf_pos = 0;
     static uint8_t buf[64];
     static uint8_t save[256];
+    static bool wait = false;
+
     const uint32_t count = tud_vendor_read(buf,sizeof(buf));
+    // 防溢出
+    if (wait) {
+        if (count == 12) {
+            wait = false;
+            speaker_buf_pos = 0;
+        }
+        return;
+    }
+    if (speaker_buf_pos + count > 204) {
+        wait = true;
+        return;
+    }
     memcpy(save + speaker_buf_pos,buf,count);
     speaker_buf_pos += count;
     if (count == 12) {
@@ -166,7 +179,7 @@ void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
 }
 
 // 未启用，备用
-void vendor_loop() {
+/*void vendor_loop() {
     if (!tud_vendor_available()) {
         return;
     }
@@ -181,4 +194,4 @@ void vendor_loop() {
         speaker_buf_pos = 0;
         speaker_send = true;
     }
-}
+}*/
