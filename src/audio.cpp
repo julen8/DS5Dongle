@@ -25,8 +25,8 @@
 static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
-static CircularBuffer audioBuffer(200 * 10);
-static CircularBuffer hapticsBuffer(64 * 10);
+static CircularBuffer audioBuffer(200 * 16);
+static CircularBuffer hapticsBuffer(64 * 16);
 static bool audioCache = true;
 static bool hapticsCache = true;
 
@@ -63,8 +63,6 @@ void haptics_proc() {
         hapticsBuffer.Write(&c_l,0,1);
         hapticsBuffer.Write(&c_r,0,1);
     }
-
-    return;
 }
 
 void send_haptics(const uint8_t* data) {
@@ -103,7 +101,7 @@ void send_speaker(const uint8_t* data) {
     pkt[8] = BUFFER_LENGTH;
     pkt[9] = BUFFER_LENGTH; // buffer length
     pkt[10] = packetCounter++;
-    pkt[11] = 0x13 | 0 << 6 | 1 << 7; // Speaker: 0x13 Headset: 0x16
+    pkt[11] = 0x16 | 0 << 6 | 1 << 7; // Speaker: 0x13 Headset: 0x16
     pkt[12] = 200;
     memcpy(pkt + 13, data, 200);
 
@@ -124,7 +122,7 @@ void send_combine(const uint8_t* speaker,const uint8_t* haptics) {
     pkt[8] = BUFFER_LENGTH;
     pkt[9] = BUFFER_LENGTH; // buffer length
     pkt[10] = packetCounter++;
-    pkt[11] = 0x13 | 0 << 6 | 1 << 7; // Speaker: 0x13 Headset: 0x16
+    pkt[11] = 0x16 | 0 << 6 | 1 << 7; // Speaker: 0x13 Headset: 0x16
     pkt[12] = 200;
     memcpy(pkt + 13, speaker, 200);
     pkt[213] = 0x12 | 0 << 6 | 1 << 7;
@@ -142,8 +140,7 @@ void audio_loop() {
     lastTime = now;
 
     static uint8_t k = 0;
-    if (++k == 16) {
-        k = 0;
+    if (++k % 16 == 0) {
         return;
     }
 
@@ -152,7 +149,7 @@ void audio_loop() {
     bool audio = false;
     uint8_t hapticsData[64] = {};
     if (hapticsCache) {
-        if (hapticsBuffer.Count() >= 64 * 5) {
+        if (hapticsBuffer.Count() >= hapticsBuffer.MaxLength()) {
             hapticsCache = false;
         }
     }else {
@@ -167,7 +164,7 @@ void audio_loop() {
     }
     uint8_t audioData[200] = {};
     if (audioCache) {
-        if (audioBuffer.Count() >= 200 * 5) {
+        if (audioBuffer.Count() >= audioBuffer.MaxLength()) {
             audioCache = false;
         }
     }else {
@@ -204,38 +201,39 @@ void audio_init() {
     resampler.Prealloc(2, 480, 32);
 }
 
-void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
+/*void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
     (void)idx;
     (void)buffer;
     (void)bufsize;
-}
+}*/
 
-// 未启用，备用
 void vendor_loop() {
-    while (tud_vendor_available()) {
-        static int speaker_buf_pos = 0;
-        static uint8_t buf[64];
-        static uint8_t save[256];
-        static bool wait = false;
+    if (!tud_vendor_available()) {
+        return;
+    }
 
-        const uint32_t count = tud_vendor_read(buf,sizeof(buf));
-        // 防溢出
-        if (wait) {
-            if (count == 8) {
-                wait = false;
-                speaker_buf_pos = 0;
-            }
-            return;
-        }
-        if (speaker_buf_pos + count > 200) {
-            wait = true;
-            return;
-        }
-        memcpy(save + speaker_buf_pos,buf,count);
-        speaker_buf_pos += count;
+    static int speaker_buf_pos = 0;
+    static uint8_t buf[64];
+    static uint8_t save[256];
+    static bool wait = false;
+
+    const uint32_t count = tud_vendor_read(buf,sizeof(buf));
+    // 防溢出
+    if (wait) {
         if (count == 8) {
-            audioBuffer.Write(save,0,200);
+            wait = false;
             speaker_buf_pos = 0;
         }
+        return;
+    }
+    if (speaker_buf_pos + count > 200) {
+        wait = true;
+        return;
+    }
+    memcpy(save + speaker_buf_pos,buf,count);
+    speaker_buf_pos += count;
+    if (count == 8) {
+        audioBuffer.Write(save,0,200);
+        speaker_buf_pos = 0;
     }
 }

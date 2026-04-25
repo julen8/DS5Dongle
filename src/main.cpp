@@ -108,9 +108,5 @@ int main() {
         vendor_loop();
         audio_loop();
         interrupt_loop();
-        // TODO:
-        // 把蓝牙的工作移到 core1
-        // core0 专注usb
-        // core0接收到足够的数据以后加到队列里面，然后core1拉取处理
     }
 }
