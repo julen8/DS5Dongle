@@ -18,7 +18,6 @@
 当前无，待反馈
 
 # 未来计划
-~~1. 耳机与扬声器支持~~ (pico 性能不够用于opus编码)
 
 # 编译
 需要将pico sdk里面的tinyusb版本升级到最新
@@ -26,3 +25,4 @@
 # 致谢
  - [rafaelvaloto/Pico_W-Dualsense](https://github.com/rafaelvaloto/Pico_W-Dualsense) - 灵感来源
  - [egormanga/SAxense](https://github.com/egormanga/SAxense) - 震动报文
+ - [https://controllers.fandom.com/wiki/Sony_DualSense](https://controllers.fandom.com/wiki/Sony_DualSense) - 数据报文结构
