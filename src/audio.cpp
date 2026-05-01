@@ -22,6 +22,9 @@
 #define REPORT_ID         0x36
 // #define VOLUME_GAIN       2
 #define BUFFER_LENGTH     48
+#define MIC_CHANNELS      2
+#define MIC_FRAMES        480
+#define MIC_OPUS_SIZE     71
 
 using std::clamp;
 using std::max;
@@ -33,11 +36,20 @@ static bool plug_headset = false;
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
 queue_t opus_fifo;
+queue_t mic_fifo;
+queue_t mic_decode_fifo;
 struct audio_raw_element {
     float data[512 * 2];
 };
 struct opus_element {
     uint8_t data[200];
+};
+struct mic_element {
+    uint8_t data[71];
+};
+struct mic_decode_element {
+    int16_t data[MIC_FRAMES * MIC_CHANNELS];
+    uint16_t len;
 };
 
 void set_headset(bool state) {
@@ -55,6 +67,14 @@ void set_headset(bool state) {
 // try_queue_remove - haptics and speaker
 // 缺点是可能会导致haptics有延迟，不够实时？
 void audio_loop() {
+    static mic_decode_element mic_element{};
+    if (queue_try_remove(&mic_decode_fifo,&mic_element)) {
+        uint16_t written = tud_audio_write(mic_element.data, mic_element.len);
+        if (written != mic_element.len) {
+            printf("[Audio] Warning: USB mic FIFO wrote %u/%u bytes\n", written, mic_element.len);
+        }
+    }
+
     // 1. 读取 USB 音频数据
     if (!tud_audio_available()) return;
 
@@ -113,7 +133,7 @@ void audio_loop() {
         reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
         pkt[2] = 0x11 | (1 << 7);
         pkt[3] = 7;
-        pkt[4] = 0b11111110;
+        pkt[4] = 0b11111111;
         pkt[5] = BUFFER_LENGTH;
         pkt[6] = BUFFER_LENGTH;
         pkt[7] = BUFFER_LENGTH;
@@ -147,11 +167,61 @@ void audio_init() {
     // resampler.Prealloc(2, 480, 32);
     queue_init(&audio_fifo,sizeof(audio_raw_element),2);
     queue_init(&opus_fifo,sizeof(opus_element),2);
+    queue_init(&mic_fifo,sizeof(mic_element),2);
+    queue_init(&mic_decode_fifo,sizeof(mic_decode_element),2);
     multicore_launch_core1_with_stack(core1_entry,audio_core1_stack,sizeof(audio_core1_stack));
 }
 
 static OpusEncoder *encoder;
+static OpusDecoder *decoder; // mic decoder
 static WDL_Resampler resampler_audio;
+
+void mic_proc() {
+    static mic_element mic_packet{};
+    if (!queue_try_remove(&mic_fifo,&mic_packet)) {
+        return;
+    }
+    static int16_t decoded_data[MIC_FRAMES * MIC_CHANNELS];
+    auto decoded_samples = opus_decode(decoder,mic_packet.data,MIC_OPUS_SIZE,decoded_data,MIC_FRAMES,false);
+    if (decoded_samples <= 0) {
+        printf("[Audio] OpusDecoder decode failed: %d\n", decoded_samples);
+        return;
+    }
+    static mic_decode_element decode_element{};
+    decode_element.len = decoded_samples * MIC_CHANNELS * sizeof(int16_t);
+    memcpy(decode_element.data,decoded_data,decode_element.len);
+    if (queue_is_full(&mic_decode_fifo)) {
+        queue_try_remove(&mic_decode_fifo,NULL);
+    }
+    queue_try_add(&mic_decode_fifo,&decode_element);
+}
+
+void speaker_proc() {
+    static audio_raw_element audio_element{};
+    if (!queue_try_remove(&audio_fifo,&audio_element)) {
+        return;
+    }
+    // 将 512 frames 重采样成 480 frames 以解决噪音问题。感谢 @Junhoo
+    WDL_ResampleSample *in_buf;
+    int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
+    for (int i = 0; i < nframes * 2;i++) {
+        in_buf[i] = audio_element.data[i];
+    }
+    static WDL_ResampleSample out_buf[480 * 2];
+    resampler_audio.ResampleOut(out_buf,nframes,480,2);
+    static opus_element opus_packet{};
+    auto encoded_frames = opus_encode_float(encoder,out_buf,480,opus_packet.data,200);
+    if (encoded_frames <= 0) {
+        printf("[Audio] OpusEncoder encoder failed: %lu\n", encoded_frames);
+        return;
+    }
+    if (queue_is_full(&opus_fifo)) {
+        queue_try_remove(&opus_fifo,NULL);
+    }
+    if (!queue_try_add(&opus_fifo,&opus_packet)) {
+        printf("[Audio] Warning: opus_fifo add failed\n");
+    }
+}
 
 void core1_entry() {
     int error = 0;
@@ -167,25 +237,22 @@ void core1_entry() {
     resampler_audio.SetMode(true,0,false);
     resampler_audio.SetRates(51200,48000);
     resampler_audio.SetFeedMode(true);
+    decoder = opus_decoder_create(48000,2,&error);
+    if (error != 0) {
+        printf("[Audio] OpusDecoder create failed\n");
+    }
 
     while (true) {
-        static audio_raw_element audio_element{};
-        queue_remove_blocking(&audio_fifo,&audio_element);
-        // 将 512 frames 重采样成 480 frames 以解决噪音问题。感谢 @Junhoo
-        WDL_ResampleSample *in_buf;
-        int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
-        for (int i = 0; i < nframes * 2;i++) {
-            in_buf[i] = audio_element.data[i];
-        }
-        static WDL_ResampleSample out_buf[480 * 2];
-        resampler_audio.ResampleOut(out_buf,nframes,480,2);
-        static opus_element opus_packet{};
-        (void)opus_encode_float(encoder,out_buf,480,opus_packet.data,200);
-        if (queue_is_full(&opus_fifo)) {
-            queue_try_remove(&opus_fifo,NULL);
-        }
-        if (!queue_try_add(&opus_fifo,&opus_packet)) {
-            printf("[Audio] Warning: opus_fifo add failed\n");
-        }
+        speaker_proc();
+        mic_proc();
     }
+}
+
+void mic_add_queue(uint8_t *data) {
+    static mic_element mic_packet{};
+    memcpy(mic_packet.data,data,MIC_OPUS_SIZE);
+    if (queue_is_full(&mic_fifo)) {
+        queue_try_remove(&mic_fifo,NULL);
+    }
+    queue_try_add(&mic_fifo,&mic_packet);
 }
