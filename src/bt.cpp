@@ -30,6 +30,19 @@ using std::queue;
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 
+extern "C" {
+#pragma pack(1)
+struct bt_pkt_struct {
+    bool inuse;
+    size_t size;
+    uint8_t bt_head;
+    uint8_t payload[0];
+};
+#pragma pack()
+}
+
+std::vector<bt_pkt_struct*> bt_pkt_manager;
+
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
 static bool device_found = false;
@@ -39,7 +52,7 @@ static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
-static queue<vector<uint8_t> > send_queue;
+static queue<bt_pkt_struct *> send_queue;
 static critical_section_t queue_lock;
 uint32_t inactive_time = 0; // 手柄长时间静默
 
@@ -172,7 +185,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_COMMAND_STATUS: {
             const uint8_t status = hci_event_command_status_get_status(packet);
             const uint16_t opcode = hci_event_command_status_get_command_opcode(packet);
-            printf("[HCI] CmdStatus %s(0x%04X) status=0x%02X\n", opcode_to_str(opcode), opcode, status);
+            // printf("[HCI] CmdStatus %s(0x%04X) status=0x%02X\n", opcode_to_str(opcode), opcode, status);
             if (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION && status != ERROR_CODE_SUCCESS) {
                 device_found = false;
                 new_pair = false;
@@ -335,10 +348,10 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (packet[0] == 0xA3) {
                 uint8_t report_id = packet[1];
                 feature_data[report_id].assign(packet + 1, packet + size);
-                printf("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
+                // printf("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
             }
-            printf("[L2CAP] HID Control data len=%u\n", size);
-            printf_hexdump(packet, size);
+            // printf("[L2CAP] HID Control data len=%u\n", size);
+            // printf_hexdump(packet, size);
             bt_data_callback(CONTROL, packet, size);
         } else {
             printf("[L2CAP] Data on unknown channel 0x%04X (Interrupt: 0x%04X, Control: 0x%04X)\n",
@@ -370,7 +383,9 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
                     init_feature();
                     // 初始化手柄状态
-                    uint8_t report32[142];
+                    // uint8_t report32[142];
+                    const auto pkt = get_bt_pkt(142);
+                    auto *report32 = get_bt_data(pkt);
                     report32[0] = 0x32;
                     report32[1] = 0x10; // reportSeqCounter
                     uint8_t packet_0x10[] =
@@ -389,7 +404,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                         0xff, 0xd7, 0x00 // RGB LED: R, G, B (Nijika Color!)✨
                     };
                     memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
-                    bt_write(report32, sizeof(report32));
+                    bt_write(pkt);
 
                     tud_connect();
                 } else {
@@ -444,11 +459,12 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 critical_section_exit(&queue_lock);
                 break;
             }
-            vector<uint8_t> data = send_queue.front();
+            auto data = send_queue.front();
             send_queue.pop();
             critical_section_exit(&queue_lock);
 
-            uint8_t status = l2cap_send(hid_interrupt_cid, data.data(), data.size());
+            uint8_t status = l2cap_send(hid_interrupt_cid, &data->bt_head, data->size + 1);
+            data->inuse = false;
             if (status != 0) {
                 printf("[L2CAP] Interrupt Error, Status: 0x%02X\n", status);
             }
@@ -458,22 +474,54 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
     }
 }
 
-void bt_write(uint8_t *data, uint16_t len) {
-    if (hid_interrupt_cid == 0) return;
-    vector<uint8_t> packet(len + 1);
-    packet[0] = 0xA2;
-    memcpy(packet.data() + 1, data, len);
-    fill_output_report_checksum(packet.data() + 1, len);
+bt_pkt get_bt_pkt(size_t size) {
+    for (const auto pkt : bt_pkt_manager) {
+        if (!pkt->inuse && pkt->size == size) {
+            pkt->inuse = true;
+            return pkt;
+        }
+    }
+
+    printf("[bt_pkt_manager] Allocating new packet of size %zu, bt_pkt_size:%d\n", size, bt_pkt_manager.size() + 1);
+    const auto buf = malloc(sizeof(bt_pkt_struct) + size);
+    const auto pkt = static_cast<bt_pkt_struct*>(buf);
+    pkt->inuse = true;
+    pkt->size = size;
+    pkt->bt_head = 0xA2;
+
+    bt_pkt_manager.push_back(pkt);
+    return pkt;
+}
+
+uint8_t* get_bt_data(bt_pkt pkt) {
+    return static_cast<bt_pkt_struct *>(pkt)->payload;
+}
+
+void bt_write(bt_pkt pkt) {
+    auto packet = static_cast<bt_pkt_struct *>(pkt);
+    if (hid_interrupt_cid == 0) {
+        packet->inuse = false;
+        return;
+    }
+
+    // packet[0] = 0xA2;
+    // fill_output_report_checksum(packet.data() + 1, packet.size() - 1);
+    fill_output_report_checksum(packet->payload, packet->size);
+    bool need_enable_send = false;
 
     critical_section_enter_blocking(&queue_lock);
-    send_queue.push(move(packet)); // 使用 move 避免深拷贝
+    if (send_queue.empty()) {
+        need_enable_send = true;
+    }
+    send_queue.push(packet);
     critical_section_exit(&queue_lock);
 
     if (hid_interrupt_cid == 0) {
         printf("[L2CAP bt_write] Warning: hid_interrupt_cid 0");
         return;
     }
-    if (send_queue.size() == 1) {
+
+    if (need_enable_send) {
         l2cap_request_can_send_now_event(hid_interrupt_cid);
     }
 }
@@ -488,7 +536,7 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
         if (hid_control_cid != 0) {
             uint8_t get_feature[] = {0x43, reportId};
             l2cap_send(hid_control_cid, get_feature, len);
-            printf("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
+            // printf("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
         }
     }
     return ret;
@@ -502,8 +550,8 @@ void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len) {
         memcpy(get_feature + 2,data,len);
         fill_feature_report_checksum(get_feature + 1,len + 1);
         l2cap_send(hid_control_cid, get_feature, len + 2);
-        printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
-        printf_hexdump(get_feature,len + 2);
+        // printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
+        // printf_hexdump(get_feature,len + 2);
     }
 }
 

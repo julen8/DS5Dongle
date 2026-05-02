@@ -116,7 +116,9 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     if (report_id == 0) {
         switch (buffer[0]) {
             case 0x02: {
-                uint8_t outputData[78];
+                // uint8_t outputData[78];
+                const auto bt_packet = get_bt_pkt(78);
+                auto *outputData = get_bt_data(bt_packet);
                 outputData[0] = 0x31;
                 outputData[1] = reportSeqCounter << 4;
                 if (++reportSeqCounter == 256) {
@@ -124,7 +126,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
                 outputData[2] = 0x10;
                 memcpy(outputData + 3, buffer + 1, bufsize - 1);
-                bt_write(outputData, sizeof(outputData));
+                bt_write(bt_packet);
                 break;
             }
         }
