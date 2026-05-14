@@ -1,0 +1,9 @@
+BasedOnStyle: Google
+IndentWidth: 4              
+ColumnLimit: 200             
+PointerAlignment: Left 
+AccessModifierOffset: -4
+FixNamespaceComments: true
+IndentPPDirectives: AfterHash 
+AllowAllConstructorInitializersOnNextLine: false
+ConstructorInitializerAllOnOneLineOrOnePerLine: false

@@ -2,20 +2,22 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include "bt.h"
+
 #include <cstdio>
 #include <cstring>
-#include "bt.h"
 #include <queue>
 #include <unordered_map>
 #include <vector>
-#include "btstack_event.h"
-#include "l2cap.h"
-#include "pico/cyw43_arch.h"
-#include "utils.h"
+
 #include "bsp/board_api.h"
+#include "btstack_event.h"
 #include "classic/sdp_server.h"
 #include "config.h"
+#include "l2cap.h"
+#include "pico/cyw43_arch.h"
 #include "pico/util/queue.h"
+#include "utils.h"
 
 #define MTU_CONTROL 672
 #define MTU_INTERRUPT 672
@@ -307,9 +309,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
-#if !ENABLE_SERIAL
             tud_disconnect();
-#endif
             gap_connectable_control(1);
             gap_discoverable_control(1);
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
@@ -337,9 +337,6 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             bt_data_callback(INTERRUPT, packet, size);
 
             // 静默检测
-            if (get_config().disable_inactive_disconnect) {
-                return;
-            }
             if (packet[3] < 120 || packet[3] > 140 ||
                 packet[4] < 120 || packet[4] > 140 ||
                 packet[5] < 120 || packet[5] > 140 ||
@@ -349,7 +346,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 packet[12] != 0x00) {
                 inactive_time = get_absolute_time();
             } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) >
-                       static_cast<int64_t>(get_config().inactive_time) * 60 * 1000 * 1000) {
+                       static_cast<int64_t>(config.inactiveTime) * 60 * 1000 * 1000) {
                 printf("disconnect when inactive\n");
                 inactive_time = get_absolute_time();
                 bt_disconnect();
@@ -359,17 +356,13 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 if (packet[0] == 0xA3 && packet[1] == 0x70) {
                     printf("Connected DSE Controller\n");
                     check_dse = false;
-                    is_dse = true;
-#if !ENABLE_SERIAL
+                    config.isDse = true;
                     tud_connect();
-#endif
                 } else if (packet[0] == 0x02) {
                     printf("Connected DS5 Controller\n");
                     check_dse = false;
-                    is_dse = false;
-#if !ENABLE_SERIAL
+                    config.isDse = false;
                     tud_connect();
-#endif
                 }
             }
             if (packet[0] == 0xA3) {
@@ -407,10 +400,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 } else if (psm == PSM_HID_INTERRUPT) {
                     printf("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
                     hid_interrupt_cid = local_cid;
-
-                    if (!get_config().disable_pico_led) {
-                        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
-                    }
+                    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
                     inactive_time = get_absolute_time();
 
                     printf("Init DualSense\n");
@@ -426,7 +416,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                         0x3f, // 63
                         // SetStateData
                         0xfd, 0xf7, 0x0, 0x0,
-                        0x7f, 0x7f, // Headphones, Speaker
+                        0x64, 0x64, // Headphones, Speaker
                         0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
                         0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
                         0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,

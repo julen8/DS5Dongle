@@ -1,0 +1,17 @@
+#pragma once
+
+#include <cstdio>
+
+#define DUMP_FMT_(func_name, fmt, ...) "%s:%d:%s: " fmt, __FILE_NAME__, __LINE__, func_name, ##__VA_ARGS__
+
+#define TRACE_FUNC_NAME_(priority, func_name, fmt, ...) printf(DUMP_FMT_(func_name, #priority ": " fmt "\n", ##__VA_ARGS__))
+
+#define LOGD_FUNC_NAME(func_name, fmt, ...) TRACE_FUNC_NAME_(DEBUG, func_name, fmt, ##__VA_ARGS__)
+#define LOGI_FUNC_NAME(func_name, fmt, ...) TRACE_FUNC_NAME_(INFO, func_name, fmt, ##__VA_ARGS__)
+#define LOGW_FUNC_NAME(func_name, fmt, ...) TRACE_FUNC_NAME_(WARNING, func_name, fmt, ##__VA_ARGS__)
+#define LOGE_FUNC_NAME(func_name, fmt, ...) TRACE_FUNC_NAME_(ERROR, func_name, fmt, ##__VA_ARGS__)
+
+#define LOGD(fmt, ...) LOGD_FUNC_NAME(__func__, fmt, ##__VA_ARGS__)
+#define LOGI(fmt, ...) LOGI_FUNC_NAME(__func__, fmt, ##__VA_ARGS__)
+#define LOGW(fmt, ...) LOGW_FUNC_NAME(__func__, fmt, ##__VA_ARGS__)
+#define LOGE(fmt, ...) LOGE_FUNC_NAME(__func__, fmt, ##__VA_ARGS__)
