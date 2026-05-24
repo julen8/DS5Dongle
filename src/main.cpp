@@ -16,10 +16,9 @@
 #include "utils.h"
 
 // Pico SDK speciifically for waiting on conditions
+#include "bluetoothPacket.h"
+#include "log.h"
 #include "pico/critical_section.h"
-
-int reportSeqCounter = 0;
-uint8_t packetCounter = 0;
 
 uint8_t interrupt_in_data[63] = {0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff,
                                  0x03, 0x03, 0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00, 0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x09,
@@ -69,7 +68,7 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
     if (channel == INTERRUPT && data[1] == 0x31) {
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
-            setHeadset(data[56] & 1);
+            config.plugHeadset = (data[56] & 1) != 0;
         }
 
         if (config.pollingRateMode != 2) {
@@ -124,27 +123,25 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 // Invoked when received SET_REPORT control request or
 // received data on OUT endpoint ( Report ID = 0, Type = 0 )
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
-    (void)itf;
-    (void)report_id;
-    (void)report_type;
-    (void)buffer;
-    (void)bufsize;
-
     // INTERRUPT OUT
     if (report_id == 0) {
         switch (buffer[0]) {
             case 0x02: {
-                uint8_t outputData[78];
-                outputData[0] = 0x31;
-                outputData[1] = reportSeqCounter << 4;
-                if (++reportSeqCounter == 256) {
-                    reportSeqCounter = 0;
+                if (auto *statusBuffer = getBufferForSubPacket(subPacketType::status); statusBuffer != nullptr) {
+                    const auto size = std::min(bufsize - 1, subPacketStatusSize);
+                    memcpy(statusBuffer, buffer + 1, size);
+                    if (size < subPacketStatusSize) {
+                        memset(statusBuffer + size, 0, subPacketStatusSize - size);
+                    }
+                    writeSubPacket(statusBuffer, subPacketType::status);
+                } else {
+                    LOGE("getBufferForSubPacket subPacketType::status");
                 }
-                outputData[2] = 0x10;
-                memcpy(outputData + 3, buffer + 1, bufsize - 1);
-                bt_write(outputData, sizeof(outputData));
                 break;
             }
+            default:
+                LOGE("Unknown sub packet type:%02X", buffer[0]);
+                break;
         }
     }
     if (report_id == 0x80 ||
@@ -189,10 +186,12 @@ int main() {
 
     // Initialize the critical section for the report buffer
     critical_section_init(&report_cs);
+    bluetoothPacketInit();
+    setBluetoothSubPacketWriteCallback(onBluetoothSubPacketWrite);
     bt_init();
     bt_register_data_callback(on_bt_data);
     audioInit();
-    watchdog_enable(1000, true);
+    watchdog_enable(5000, true);
 
     for (;;) {
         watchdog_update();

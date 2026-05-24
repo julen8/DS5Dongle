@@ -13,10 +13,9 @@
 #include <algorithm>
 #include <cmath>
 
-#include "bt.h"
+#include "bluetoothPacket.h"
 #include "config.h"
 #include "log.h"
-#include "usb.h"
 #include "utils.h"
 
 /*
@@ -33,18 +32,14 @@
  *                         音频重采样:将512frames变成480frames数据，因为opus不能处理512frames为了对齐
  */
 
-constexpr auto inputChannels = 4;         // 固定不能修改
-constexpr auto hapticChannels = 2;        // 固定不能修改
-constexpr auto audioChannels = 2;         // 固定不能修改
-constexpr auto audioRawElementSize = 3;   // 音频原始数据缓冲buf数量
-constexpr auto audioOpusElementSize = 3;  // 音频opus编码后缓冲buf数量
+constexpr auto inputChannels = 4;        // 固定不能修改
+constexpr auto hapticChannels = 2;       // 固定不能修改
+constexpr auto audioChannels = 2;        // 固定不能修改
+constexpr auto audioRawElementSize = 3;  // 音频原始数据缓冲buf数量
 
 constexpr auto readRawFrames = 48;          // 每次读取多少帧原始数据
 constexpr auto rawSamplingRate = 48000;     // 固定不能修改
 constexpr auto hapticOutSampleRate = 3000;  // 震动重采样输出的采样率
-
-constexpr auto hapticDataSizeInBtPacket = 64;  // 蓝牙包中震动数据的大小
-constexpr auto audioDataSizeInBtPacket = 200;  // 蓝牙包中音频数据的大小
 
 constexpr auto audioResamplerInputFrames = 512;
 constexpr auto audioResamplerOutputFrames = 480;
@@ -57,16 +52,11 @@ constexpr uint8_t muteOpusPackage[] = {
     00,   00,   00,   00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
     00,   00,   00,   00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
 };
-static_assert(sizeof(muteOpusPackage) == audioDataSizeInBtPacket, "sizeof(muteOpusPackage) != audioDataSizeInBtPacket");
+static_assert(sizeof(muteOpusPackage) == subPacketAudioSize, "sizeof(muteOpusPackage) != subPacketAudioSize");
 
 struct AudioRawElement {
     bool inuse = false;
     WDL_ResampleSample data[audioResamplerInputFrames * audioChannels]{};
-};
-
-struct AudioOpusElement {
-    bool inuse = false;
-    uint8_t data[audioDataSizeInBtPacket]{};
 };
 
 static struct {
@@ -74,18 +64,14 @@ static struct {
     WDL_Resampler hapticResampler{};
     WDL_Resampler audioResampler{};
     OpusEncoder* encoder = nullptr;
-    bool plugHeadset = false;
-    uint8_t reportSeqCounter = 0;
-    uint8_t packetCounter = 0;
     queue_t audioRawFifo;
-    queue_t audioOpusFifo;
     AudioRawElement audioRawElementArray[audioRawElementSize]{};
-    AudioOpusElement audioOpusElementArray[audioOpusElementSize]{};
-    int8_t hapticBuf[hapticDataSizeInBtPacket]{};
+    int8_t* hapticBuf = nullptr;
     AudioRawElement* currentAudioRawElement = nullptr;
     int hapticBufPos = 0;
     int audioBufPos = 0;
     bool needSendEndMuteOpusPackage = false;
+    bool audioWaitData = true;
 } audio{};
 
 inline AudioRawElement* getAudioRawElement() {
@@ -99,21 +85,7 @@ inline AudioRawElement* getAudioRawElement() {
     return nullptr;
 }
 
-inline AudioOpusElement* getAudioOpusElement() {
-    for (auto& elem : audio.audioOpusElementArray) {
-        if (!elem.inuse) {
-            elem.inuse = true;
-            return &elem;
-        }
-    }
-
-    return nullptr;
-}
-
 inline void freeAudioRawElement(AudioRawElement* audioRawElement) { audioRawElement->inuse = false; }
-inline void freeAudioOpusElement(AudioOpusElement* audioOpusElement) { audioOpusElement->inuse = false; }
-
-void setHeadset(const bool state) { audio.plugHeadset = state; }
 
 inline float getAudioGain() {
     static float lastSpeakerVolume = config.speakerVolume;
@@ -124,60 +96,10 @@ inline float getAudioGain() {
         audioGain = powf(10.0F, config.speakerVolume / 20.0F);
     }
 
-    return (mute[0] == 0) ? audioGain : 0.0F;
-}
-
-inline void packAndWriteBtDataPacket(const int8_t* hapticBuf, const uint8_t* audioBuf) {
-    constexpr auto reportSize = 398;
-    constexpr uint8_t reportId = 0x36;
-    uint8_t pkt[reportSize]{};
-    pkt[0] = reportId;
-    pkt[1] = audio.reportSeqCounter << 4;
-    audio.reportSeqCounter = (audio.reportSeqCounter + 1) & 0x0F;
-    pkt[2] = 0x11 | 0 << 6 | 1 << 7;
-    pkt[3] = 7;
-    pkt[4] = 0b11111110;
-    const auto bufLen = config.audioBufferLength;
-    pkt[5] = bufLen;
-    pkt[6] = bufLen;
-    pkt[7] = bufLen;
-    pkt[8] = bufLen;  // 这 4 个字节的作用未知，调整没有效果
-    pkt[9] = bufLen;  // audio buffer length 只有调整这个字节生效。
-    pkt[10] = audio.packetCounter++;
-    pkt[11] = 0x12 | 0 << 6 | 1 << 7;
-    pkt[12] = hapticDataSizeInBtPacket;
-    if (hapticBuf != nullptr) {
-        memcpy(pkt + 13, hapticBuf, hapticDataSizeInBtPacket);
-    } else {
-        memset(pkt + 13, 0, hapticDataSizeInBtPacket);
-    }
-    pkt[77] = (audio.plugHeadset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;  // Speaker: 0x13
-                                                                    // L Headset Mono: 0x14
-                                                                    // L Headset R Speaker: 0x15
-                                                                    // Headset: 0x16
-    pkt[78] = audioDataSizeInBtPacket;
-    if (audioBuf != nullptr) {
-        memcpy(pkt + 79, audioBuf, audioDataSizeInBtPacket);
-    } else {
-        memcpy(pkt + 79, muteOpusPackage, audioDataSizeInBtPacket);
-    }
-
-    bt_write(pkt, sizeof(pkt), true);
-}
-
-inline void packAndWriteBtDataPacket(const int8_t* hapticBuf) {
-    if (AudioOpusElement* audioOpusElement = nullptr; !queue_try_remove(&audio.audioOpusFifo, static_cast<void*>(&audioOpusElement))) {
-        LOGW("audioOpusFifo remove failed, send muteOpusPackage");
-        packAndWriteBtDataPacket(hapticBuf, nullptr);
-    } else {
-        packAndWriteBtDataPacket(hapticBuf, audioOpusElement->data);
-        freeAudioOpusElement(audioOpusElement);
-    }
+    return (config.mute[0] == 0) ? audioGain : 0.0F;
 }
 
 inline void processingRemainingData() {
-    const int8_t* hapticBuf = nullptr;
-
     if (audio.audioBufPos != 0) {
         if (audio.currentAudioRawElement == nullptr) {
             LOGW("audioBufPos=%d but currentAudioRawElement is null, discarding", audio.audioBufPos);
@@ -192,31 +114,38 @@ inline void processingRemainingData() {
 
             audio.currentAudioRawElement = nullptr;
             audio.audioBufPos = 0;
-        }  // end else (currentAudioRawElement != nullptr)
-    }
+        }
 
-    if (audio.hapticBufPos != 0) {
-        memset(audio.hapticBuf + audio.hapticBufPos, 0, (std::size(audio.hapticBuf) - audio.hapticBufPos) * sizeof(audio.hapticBuf[0]));
-        audio.hapticBufPos = 0;
-        hapticBuf = audio.hapticBuf;
-    }
-
-    if (hapticBuf != nullptr) {
-        packAndWriteBtDataPacket(hapticBuf);
-        audio.needSendEndMuteOpusPackage = true;
         return;
     }
 
-    if (!queue_is_empty(&audio.audioOpusFifo)) {
-        packAndWriteBtDataPacket(nullptr);
+    uint8_t* hapticBuf = nullptr;
+    if (audio.hapticBufPos != 0) {
+        memset(audio.hapticBuf + audio.hapticBufPos, 0, subPacketHapticSize - audio.hapticBufPos);
+        audio.hapticBufPos = 0;
+        hapticBuf = reinterpret_cast<uint8_t*>(audio.hapticBuf);
+        audio.hapticBuf = nullptr;
+    }
+
+    if (hapticBuf != nullptr) {
+        writeSubPacket(hapticBuf, subPacketType::haptic);
         audio.needSendEndMuteOpusPackage = true;
         return;
     }
 
     // 补发一个静音包，避免下次开始播放时出现一个杂音
-    if (audio.needSendEndMuteOpusPackage) {
+    if (audio.audioWaitData && audio.needSendEndMuteOpusPackage) {
         audio.needSendEndMuteOpusPackage = false;
-        packAndWriteBtDataPacket(nullptr);
+
+        if (auto* audioBuff = getBufferForSubPacket(subPacketType::audio); audioBuff != nullptr) {
+            memcpy(audioBuff, muteOpusPackage, subPacketAudioSize);
+            writeSubPacket(audioBuff, subPacketType::audio);
+        }
+
+        if (auto* buffer = getBufferForSubPacket(subPacketType::haptic); buffer != nullptr) {
+            memset(buffer, 0, subPacketHapticSize);
+            writeSubPacket(buffer, subPacketType::haptic);
+        }
     }
 }
 
@@ -241,6 +170,10 @@ void audioLoop() {
 
     WDL_ResampleSample* hapticResampleInBuf = nullptr;
     const int nFrames = audio.hapticResampler.ResamplePrepare(static_cast<int>(actualRawFrames), hapticChannels, &hapticResampleInBuf);
+    if (hapticResampleInBuf == nullptr) {
+        LOGE("hapticResampleInBuf is null");
+        return;
+    }
 
     const float audioGain = getAudioGain();
     for (int i = 0; i < nFrames; i++) {
@@ -279,13 +212,22 @@ void audioLoop() {
 
     // 4. 转换为int8并缓冲，满64字节即组包发送
     for (int i = 0; i < hapticResampleOutFrames; i++) {
-        int val_l = static_cast<int>(hapticResampleOutBuf[i * 2] * (INT8_MAX + 1));
-        int val_r = static_cast<int>(hapticResampleOutBuf[i * 2 + 1] * (INT8_MAX + 1));
-        audio.hapticBuf[audio.hapticBufPos++] = static_cast<int8_t>(std::clamp(val_l, INT8_MIN, INT8_MAX));
-        audio.hapticBuf[audio.hapticBufPos++] = static_cast<int8_t>(std::clamp(val_r, INT8_MIN, INT8_MAX));
+        if (audio.hapticBuf == nullptr) {
+            audio.hapticBuf = reinterpret_cast<int8_t*>(getBufferForSubPacket(subPacketType::haptic));
+            if (audio.hapticBuf == nullptr) {
+                LOGE("getBufferForSubPacket for haptic failed");
+                break;
+            }
+        }
 
-        if (audio.hapticBufPos == hapticDataSizeInBtPacket) {
-            packAndWriteBtDataPacket(audio.hapticBuf);
+        int valLeftChannel = static_cast<int>(hapticResampleOutBuf[i * 2] * (INT8_MAX + 1));
+        int valRightChannel = static_cast<int>(hapticResampleOutBuf[i * 2 + 1] * (INT8_MAX + 1));
+        audio.hapticBuf[audio.hapticBufPos++] = static_cast<int8_t>(std::clamp(valLeftChannel, INT8_MIN, INT8_MAX));
+        audio.hapticBuf[audio.hapticBufPos++] = static_cast<int8_t>(std::clamp(valRightChannel, INT8_MIN, INT8_MAX));
+
+        if (audio.hapticBufPos == subPacketHapticSize) {
+            writeSubPacket(reinterpret_cast<uint8_t*>(audio.hapticBuf), subPacketType::haptic);
+            audio.hapticBuf = nullptr;
             audio.hapticBufPos = 0;
         }
     }
@@ -309,7 +251,9 @@ void core1Entry() {
 
     for (;;) {
         AudioRawElement* audioRawElement = nullptr;
+        audio.audioWaitData = true;
         queue_remove_blocking(&audio.audioRawFifo, static_cast<void*>(&audioRawElement));
+        audio.audioWaitData = false;
         // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
         WDL_ResampleSample* inBuf = nullptr;
         const int frames = audio.audioResampler.ResamplePrepare(audioResamplerInputFrames, audioChannels, &inBuf);
@@ -328,21 +272,17 @@ void core1Entry() {
         static WDL_ResampleSample resampleOutBuf[audioResamplerOutputFrames * audioChannels];
         audio.audioResampler.ResampleOut(resampleOutBuf, frames, audioResamplerOutputFrames, audioChannels);
 
-        auto* audioOpusElement = getAudioOpusElement();
-        if (audioOpusElement == nullptr) {
+        auto* audioOut = getBufferForSubPacket(subPacketType::audio);
+        if (audioOut == nullptr) {
             LOGW("Opus get out buf err");
             continue;
         }
-        if (const auto ret = opus_encode_float(audio.encoder, resampleOutBuf, audioResamplerOutputFrames, audioOpusElement->data, audioDataSizeInBtPacket); ret < 0) {
+        if (const auto ret = opus_encode_float(audio.encoder, resampleOutBuf, audioResamplerOutputFrames, audioOut, subPacketAudioSize); ret < 0) {
             LOGE("opus_encode_float failed:%d", ret);
-            freeAudioOpusElement(audioOpusElement);
+            freeSubPacket(audioOut, subPacketType::audio);
             continue;
         }
-
-        if (!queue_try_add(&audio.audioOpusFifo, static_cast<void*>(&audioOpusElement))) {
-            LOGW("audioOpusFifo add failed");
-            freeAudioOpusElement(audioOpusElement);
-        }
+        writeSubPacket(audioOut, subPacketType::audio);
     }
 }
 
@@ -352,6 +292,5 @@ void audioInit() {
     audio.hapticResampler.SetFeedMode(true);
     audio.hapticResampler.Prealloc(hapticChannels, readRawFrames, readRawFrames / (rawSamplingRate / hapticOutSampleRate));  // 每次输入 48 帧，输出 3 帧（48/16）
     queue_init(&audio.audioRawFifo, sizeof(AudioRawElement*), audioRawElementSize);
-    queue_init(&audio.audioOpusFifo, sizeof(AudioOpusElement*), audioOpusElementSize);
     multicore_launch_core1_with_stack(core1Entry, audio.audio_core1_stack, sizeof(audio.audio_core1_stack));
 }

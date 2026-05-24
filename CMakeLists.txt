@@ -59,6 +59,7 @@ add_executable(ds5-bridge
         src/audio.cpp
         src/bt.cpp
         src/config.cpp
+        src/bluetoothPacket.cpp
 )
 
 target_include_directories(ds5-bridge PRIVATE
