@@ -4,34 +4,28 @@
 
 #include "bt.h"
 
+#include <bsp/board_api.h>
+#include <btstack_event.h>
+#include <classic/sdp_server.h>
+#include <l2cap.h>
+#include <pico/cyw43_arch.h>
+#include <pico/util/queue.h>
+
 #include <cstdio>
 #include <cstring>
-#include <queue>
 #include <unordered_map>
 #include <vector>
 
 #include "bluetoothPacket.h"
-#include "bsp/board_api.h"
-#include "btstack_event.h"
-#include "classic/sdp_server.h"
 #include "config.h"
-#include "l2cap.h"
 #include "log.h"
-#include "pico/cyw43_arch.h"
-#include "pico/util/queue.h"
 #include "utils.h"
 
 #define MTU_CONTROL 672
 #define MTU_INTERRUPT 672
 
-using std::queue;
-using std::unordered_map;
-using std::vector;
-
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
-
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
-
 void requestSend();
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
@@ -44,30 +38,10 @@ static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
 static bool check_dse = false;
 static bool theRequestHasBeenSent = false;
-unordered_map<uint8_t, vector<uint8_t> > feature_data;
-// queue_t send_fifo;
-// queue_t priority_send_fifo;
-
-// struct send_element {
-//     uint8_t data[512];
-//     size_t len;
-// };
-
+std::unordered_map<uint8_t, std::vector<uint8_t> > feature_data;
 absolute_time_t inactive_time = 0;  // 手柄长时间静默
 
 void bt_register_data_callback(bt_data_callback_t callback) { bt_data_callback = callback; }
-
-void bt_send_packet(uint8_t *data, uint16_t len) {
-    if (hid_interrupt_cid != 0) {
-        l2cap_send(hid_interrupt_cid, data, len);
-    }
-}
-
-void bt_send_control(uint8_t *data, uint16_t len) {
-    if (hid_control_cid != 0) {
-        l2cap_send(hid_control_cid, data, len);
-    }
-}
 
 bool bt_disconnect() {
     if (acl_handle == HCI_CON_HANDLE_INVALID) {
@@ -91,9 +65,6 @@ void bt_l2cap_init() {
 }
 
 int bt_init() {
-    // queue_init(&send_fifo, sizeof(send_element), 10);
-    // queue_init(&priority_send_fifo, sizeof(send_element), 10);
-
     bt_l2cap_init();
 
     // SSP (Secure Simple Pairing)
@@ -112,32 +83,15 @@ int bt_init() {
     return 0;
 }
 
-/*int main() {
-    stdio_init_all();
-
-    /*while (!stdio_usb_connected()) {
-        sleep_ms(100);
-    }
-    printf("USB Serial connected!\n");#1#
-
-    bt_init();
-
-    while (1) {
-        sleep_ms(10);
-    }
-}*/
-
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
-    (void)channel;
-
     const uint8_t event_type = hci_event_packet_get_type(packet);
 
     switch (event_type) {
         case BTSTACK_EVENT_STATE: {
             const uint8_t state = btstack_event_state_get_state(packet);
-            printf("[BT] State: %u\n", state);
+            LOGI("[BT] State: %u", state);
             if (state == HCI_STATE_WORKING) {
-                printf("[BT] Stack ready, start inquiry\n");
+                LOGI("[BT] Stack ready, start inquiry");
                 gap_inquiry_start(30);
             }
             break;
@@ -161,7 +115,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 
             // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
             if ((cod & 0x000F00) == 0x000500) {
-                printf("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int)cod);
+                LOGI("[HCI] Gamepad found: %s (CoD: 0x%06x)", bd_addr_to_str(addr), (unsigned int)cod);
                 bd_addr_copy(current_device_addr, addr);
                 device_found = true;
                 gap_inquiry_stop();
@@ -171,15 +125,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 
         case GAP_EVENT_INQUIRY_COMPLETE:
         case HCI_EVENT_INQUIRY_COMPLETE: {
-            printf("[HCI] Inquiry complete.\n");
+            LOGI("[HCI] Inquiry complete.");
             if (device_found) {
-                printf("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
+                LOGI("[HCI] Connecting to %s...", bd_addr_to_str(current_device_addr));
                 new_pair = true;
                 hci_send_cmd(&hci_create_connection, current_device_addr, hci_usable_acl_packet_types(), 0, 0, 0, 1);
                 break;
             }
             if (event_type == HCI_EVENT_INQUIRY_COMPLETE) {
-                printf("[HCI] Restart inquiry\n");
+                LOGI("[HCI] Restart inquiry");
                 gap_inquiry_start(30);
                 gap_connectable_control(1);
                 gap_discoverable_control(1);
@@ -189,11 +143,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_COMMAND_STATUS: {
             const uint8_t status = hci_event_command_status_get_status(packet);
             const uint16_t opcode = hci_event_command_status_get_command_opcode(packet);
-            printf("[HCI] CmdStatus %s(0x%04X) status=0x%02X\n", opcode_to_str(opcode), opcode, status);
+            LOGI("[HCI] CmdStatus %s(0x%04X) status=0x%02X", opcode_to_str(opcode), opcode, status);
             if (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION && status != ERROR_CODE_SUCCESS) {
                 device_found = false;
                 new_pair = false;
-                printf("[HCI] Create connection rejected, restart inquiry\n");
+                LOGW("[HCI] Create connection rejected, restart inquiry");
                 // gap_inquiry_start(30);
             }
             break;
@@ -202,7 +156,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_COMMAND_COMPLETE: {
             const uint8_t status = hci_event_command_complete_get_return_parameters(packet)[0];
             const uint16_t opcode = hci_event_command_complete_get_command_opcode(packet);
-            printf("[HCI] CmdComplete %s(0x%04X) status=0x%02X\n", opcode_to_str(opcode), opcode, status);
+            LOGI("[HCI] CmdComplete %s(0x%04X) status=0x%02X", opcode_to_str(opcode), opcode, status);
             break;
         }
 
@@ -212,13 +166,13 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 const hci_con_handle_t handle = hci_event_connection_complete_get_connection_handle(packet);
                 acl_handle = handle;
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
-                printf("[HCI] ACL connected handle=0x%04X\n", handle);
-                printf("[HCI] Request authentication on handle=0x%04X\n", handle);
+                LOGI("[HCI] ACL connected handle=0x%04X", handle);
+                LOGI("[HCI] Request authentication on handle=0x%04X", handle);
                 hci_send_cmd(&hci_authentication_requested, handle);
             } else {
                 device_found = false;
                 new_pair = false;
-                printf("[HCI] ACL connect failed status=0x%02X, restart inquiry\n", status);
+                LOGW("[HCI] ACL connect failed status=0x%02X, restart inquiry", status);
                 // gap_inquiry_start(30);
             }
             break;
@@ -230,16 +184,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             link_key_t link_key;
             link_key_type_t link_key_type;
             bool link = gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
-            printf("[HCI] Link key: ");
+            LOGI("[HCI] Link key: ");
             for (int i = 0; i < sizeof(link_key_t); i++) {
-                printf("%02X", link_key[i]);
+                LOGI("%02X", link_key[i]);
             }
-            printf("\n");
             if (link) {
-                printf("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr), (unsigned int)link_key_type);
+                LOGI("[HCI] Link key request from %s, reply stored key type=%u", bd_addr_to_str(addr), (unsigned int)link_key_type);
                 hci_send_cmd(&hci_link_key_request_reply, addr, link_key);
             } else {
-                printf("[HCI] Link key request from %s, no key, force re-pair\n", bd_addr_to_str(addr));
+                LOGI("[HCI] Link key request from %s, no key, force re-pair", bd_addr_to_str(addr));
                 hci_send_cmd(&hci_link_key_request_negative_reply, addr);
             }
             break;
@@ -248,7 +201,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_USER_CONFIRMATION_REQUEST: {
             bd_addr_t addr;
             hci_event_user_confirmation_request_get_bd_addr(packet, addr);
-            printf("[HCI] User confirmation request from %s, accept\n", bd_addr_to_str(addr));
+            LOGI("[HCI] User confirmation request from %s, accept", bd_addr_to_str(addr));
             hci_send_cmd(&hci_user_confirmation_request_reply, addr);
             break;
         }
@@ -256,7 +209,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_PIN_CODE_REQUEST: {
             bd_addr_t addr;
             hci_event_pin_code_request_get_bd_addr(packet, addr);
-            printf("[HCI] Legacy pin request from %s, reply 0000\n", bd_addr_to_str(addr));
+            LOGI("[HCI] Legacy pin request from %s, reply 0000", bd_addr_to_str(addr));
             gap_pin_code_response(addr, "0000");
             break;
         }
@@ -264,9 +217,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_AUTHENTICATION_COMPLETE: {
             const uint8_t status = hci_event_authentication_complete_get_status(packet);
             const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
-            printf("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
+            LOGI("[HCI] Authentication complete handle=0x%04X status=0x%02X", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
-                printf("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
+                LOGW("[HCI] Authentication failed, drop stored key for %s", bd_addr_to_str(current_device_addr));
                 gap_drop_link_key_for_bd_addr(current_device_addr);
                 // gap_inquiry_start(30);
             } else {
@@ -279,9 +232,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t status = hci_event_encryption_change_get_status(packet);
             const hci_con_handle_t handle = hci_event_encryption_change_get_connection_handle(packet);
             const uint8_t enabled = hci_event_encryption_change_get_encryption_enabled(packet);
-            printf("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
+            LOGI("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u", handle, status, enabled);
             if (status == ERROR_CODE_SUCCESS && enabled) {
-                printf("[L2CAP] Open HID channels\n");
+                LOGI("[L2CAP] Open HID channels");
                 if (new_pair) {
                     if (hid_control_cid == 0) {
                         l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_CONTROL, MTU_CONTROL, &hid_control_cid);
@@ -297,7 +250,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             bd_addr_t addr;
             hci_event_connection_request_get_bd_addr(packet, addr);
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
-            printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int)cod);
+            LOGI("[HCI] Incoming ACL request from %s cod=0x%06x", bd_addr_to_str(addr), (unsigned int)cod);
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
                 gap_inquiry_stop();
@@ -318,7 +271,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hid_interrupt_cid = 0;
             feature_data.clear();
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
-            printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
+            LOGI("[HCI] Disconnected reason=0x%02X, start inquiry", reason);
             gap_inquiry_start(30);
             break;
         }
@@ -330,8 +283,6 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
     if (packet_type == L2CAP_DATA_PACKET) {
         if (channel == hid_interrupt_cid) {
-            // printf("[L2CAP] HID Interrupt data len=%u\n", size);
-            // printf_hexdump(packet, size);
             bt_data_callback(INTERRUPT, packet, size);
 
             // 静默检测
@@ -339,19 +290,19 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 packet[8] > 0 || packet[10] != 0x08 || packet[11] != 0x00 || packet[12] != 0x00) {
                 inactive_time = get_absolute_time();
             } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) > static_cast<int64_t>(config.inactiveTime) * 60 * 1000 * 1000) {
-                printf("disconnect when inactive\n");
+                LOGI("disconnect when inactive");
                 inactive_time = get_absolute_time();
                 bt_disconnect();
             }
         } else if (channel == hid_control_cid) {
             if (check_dse) {
                 if (packet[0] == 0xA3 && packet[1] == 0x70) {
-                    printf("Connected DSE Controller\n");
+                    LOGI("Connected DSE Controller");
                     check_dse = false;
                     config.isDse = true;
                     tud_connect();
                 } else if (packet[0] == 0x02) {
-                    printf("Connected DS5 Controller\n");
+                    LOGI("Connected DS5 Controller");
                     check_dse = false;
                     config.isDse = false;
                     tud_connect();
@@ -360,17 +311,17 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (packet[0] == 0xA3) {
                 uint8_t report_id = packet[1];
                 feature_data[report_id].assign(packet + 1, packet + size);
-#if ENABLE_VERBOSE
-                printf("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
-#endif
+                LOGD("[L2CAP] Stored Feature Report 0x%02X, len=%u", report_id, size - 1);
             }
-#if ENABLE_VERBOSE
-            printf("[L2CAP] HID Control data len=%u\n", size);
+
+            LOGD("[L2CAP] HID Control data len=%u", size);
+#if ENABLE_DEBUG
             printf_hexdump(packet, size);
 #endif
+
             bt_data_callback(CONTROL, packet, size);
         } else {
-            printf("[L2CAP] Data on unknown channel 0x%04X (Interrupt: 0x%04X, Control: 0x%04X)\n", channel, hid_interrupt_cid, hid_control_cid);
+            LOGE("[L2CAP] Data on unknown channel 0x%04X (Interrupt: 0x%04X, Control: 0x%04X)", channel, hid_interrupt_cid, hid_control_cid);
         }
         return;
     }
@@ -383,27 +334,20 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (status == 0) {
                 const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
                 if (psm == PSM_HID_CONTROL) {
-                    printf("[L2CAP] HID Control opened cid=0x%04X\n", local_cid);
+                    LOGI("[L2CAP] HID Control opened cid=0x%04X", local_cid);
                     hid_control_cid = local_cid;
 
                     const auto mtu = l2cap_get_remote_mtu_for_local_cid(hid_control_cid);
-                    printf("[L2CAP] Remote Control MTU: %d\n", mtu);
+                    LOGI("[L2CAP] Remote Control MTU: %d", mtu);
                 } else if (psm == PSM_HID_INTERRUPT) {
-                    printf("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
+                    LOGI("[L2CAP] HID Interrupt opened cid=0x%04X", local_cid);
                     hid_interrupt_cid = local_cid;
                     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
                     inactive_time = get_absolute_time();
 
-                    printf("Init DualSense\n");
-
+                    LOGI("Init DualSense");
                     init_feature();
                     // 初始化手柄状态
-
-                    static constexpr uint8_t stateInitData[subPacketStatusSize] = {
-                        0xfd, 0xf7, 0x0, 0x0,  0x50, 0x50,  // Headphones, Speaker
-                        0xff, 0x9,  0x0, 0x0F, 0x0,  0x0,  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,  0x0,  0x0,  0x0, 0x0,
-                        0x0,  0x0,  0x0, 0x0,  0x0,  0x0,  0x0, 0x0, 0x0, 0x0, 0xa, 0x7, 0x0, 0x0, 0x2, 0x1, 0x00, 0xff, 0xd7, 0x00  // RGB LED: R, G, B (Nijika Color!)✨
-                    };
                     if (auto *statusBuffer = getBufferForSubPacket(subPacketType::status); statusBuffer != nullptr) {
                         memcpy(statusBuffer, stateInitData, subPacketStatusSize);
                         writeSubPacket(statusBuffer, subPacketType::status);
@@ -412,17 +356,17 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     }
 
                     const auto mtu = l2cap_get_remote_mtu_for_local_cid(hid_interrupt_cid);
-                    printf("[L2CAP] Remote Interrupt MTU: %d\n", mtu);
+                    LOGI("[L2CAP] Remote Interrupt MTU: %d", mtu);
 
                     gap_connectable_control(false);
                     gap_discoverable_control(false);
                     // tud_connect();
                 } else {
-                    printf("[L2CAP] Unknown Channel psm: 0x%02X", psm);
+                    LOGE("[L2CAP] Unknown Channel psm: 0x%02X", psm);
                 }
 
                 /*if (hid_control_cid != 0 && hid_interrupt_cid != 0) {
-                    printf("[L2CAP] HID channels ready, request CAN_SEND_NOW for SET_PROTOCOL\n");
+                    LOGI("[L2CAP] HID channels ready, request CAN_SEND_NOW for SET_PROTOCOL");
                     l2cap_request_can_send_now_event(hid_control_cid);
                 }*/
             } else {
@@ -430,7 +374,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 hid_control_cid = 0;
                 hid_interrupt_cid = 0;
                 device_found = false;
-                printf("[L2CAP] Open failed psm=0x%04X status=0x%02X\n", psm, status);
+                LOGI("[L2CAP] Open failed psm=0x%04X status=0x%02X", psm, status);
                 bt_disconnect();
             }
             break;
@@ -439,7 +383,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
         case L2CAP_EVENT_INCOMING_CONNECTION: {
             const uint16_t local_cid = l2cap_event_incoming_connection_get_local_cid(packet);
             const uint16_t psm = l2cap_event_incoming_connection_get_psm(packet);
-            printf("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X\n", psm, local_cid);
+            LOGI("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X", psm, local_cid);
             l2cap_accept_connection(local_cid);
             break;
         }
@@ -448,12 +392,12 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             const uint16_t local_cid = l2cap_event_channel_closed_get_local_cid(packet);
             if (local_cid == hid_control_cid) {
                 hid_control_cid = 0;
-                printf("[L2CAP] HID Control closed cid=0x%04X\n", local_cid);
+                LOGI("[L2CAP] HID Control closed cid=0x%04X", local_cid);
             } else if (local_cid == hid_interrupt_cid) {
                 hid_interrupt_cid = 0;
-                printf("[L2CAP] HID Interrupt closed cid=0x%04X\n", local_cid);
+                LOGI("[L2CAP] HID Interrupt closed cid=0x%04X", local_cid);
             } else {
-                printf("[L2CAP] Channel closed cid=0x%04X\n", local_cid);
+                LOGI("[L2CAP] Channel closed cid=0x%04X", local_cid);
             }
             if (hid_control_cid == 0 && hid_interrupt_cid == 0) {
                 bt_disconnect();
@@ -489,16 +433,15 @@ void requestSend() {
     }
 }
 
-void onBluetoothSubPacketWrite() {
-        requestSend();
-}
+void onBluetoothSubPacketWrite() { requestSend(); }
 
-vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
+std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     // 若为0x81则会请求新内容，其他若有旧数据则不进行请求
-    auto ret = vector<uint8_t>{};
+    auto ret = std::vector<uint8_t>{};
     if (feature_data.contains(reportId)) {
         ret = feature_data[reportId];
     }
+
     if (!feature_data.contains(reportId) ||
         // Get Test Command Result
         reportId == 0x81 ||
@@ -507,9 +450,7 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
         if (hid_control_cid != 0) {
             uint8_t get_feature[] = {0x43, reportId};
             l2cap_send(hid_control_cid, get_feature, sizeof(get_feature));
-#if ENABLE_VERBOSE
-            printf("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
-#endif
+            LOGD("[L2CAP] Requesting Get Feature Report 0x%02X", reportId);
         }
     }
     return ret;
@@ -523,8 +464,9 @@ void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
         memcpy(get_feature + 2, data, len);
         fill_feature_report_checksum(get_feature + 1, len + 1);
         l2cap_send(hid_control_cid, get_feature, len + 2);
-#if ENABLE_VERBOSE
-        printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
+
+        LOGD("[L2CAP] Requesting Set Feature Report 0x%02X", reportId);
+#if ENABLE_DEBUG
         printf_hexdump(get_feature, len + 2);
 #endif
     }

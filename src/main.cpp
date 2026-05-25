@@ -19,10 +19,11 @@
 #include "bluetoothPacket.h"
 #include "log.h"
 #include "pico/critical_section.h"
-
-uint8_t interrupt_in_data[63] = {0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff,
+constexpr auto bluetoothInterruptDataSize = 63;
+static uint8_t interrupt_in_data[] = {0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff,
                                  0x03, 0x03, 0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00, 0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x09,
                                  0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00, 0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b};
+static_assert(sizeof(interrupt_in_data) == bluetoothInterruptDataSize, "interrupt_in_data must be 63 bytes long");
 
 critical_section_t report_cs;
 volatile bool report_dirty = false;
@@ -32,19 +33,19 @@ void interrupt_loop() {
 
     // TODO: Refactor for better code reuse
     if (config.pollingRateMode != 2) {
-        if (!tud_hid_report(0x01, interrupt_in_data, 63)) {
-            printf("[USBHID] tud_hid_report error\n");
+        if (!tud_hid_report(0x01, interrupt_in_data, bluetoothInterruptDataSize)) {
+            LOGE("[USBHID] tud_hid_report error");
         }
         return;
     }
 
     bool should_send = false;
     // Local buffer to hold the report data while we prepare it to send.
-    uint8_t safe_report[63];
+    uint8_t safe_report[bluetoothInterruptDataSize];
 
     critical_section_enter_blocking(&report_cs);
     if (report_dirty) {
-        memcpy(safe_report, interrupt_in_data, 63);
+        memcpy(safe_report, interrupt_in_data, bluetoothInterruptDataSize);
         report_dirty = false;
         should_send = true;
     }
@@ -52,8 +53,8 @@ void interrupt_loop() {
 
     // Only send to TinyUSB if we actually grabbed fresh data
     if (should_send) {
-        if (!tud_hid_report(0x01, safe_report, 63)) {
-            printf("[USBHID] tud_hid_report error\n");
+        if (!tud_hid_report(0x01, safe_report, bluetoothInterruptDataSize)) {
+            LOGE("[USBHID] tud_hid_report error");
 
             // If the report failed to queue, restore the dirty flag
             // so we try again on the next loop iteration.
@@ -65,14 +66,19 @@ void interrupt_loop() {
 }
 
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
-    // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
+    // LOGD("[Main] BT data callback: channel=%u len=%u", channel, len);
     if (channel == INTERRUPT && data[1] == 0x31) {
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
             config.plugHeadset = (data[56] & 1) != 0;
         }
 
+        if (len - 3 < bluetoothInterruptDataSize) {
+            LOGW("(len - 3):%d < bluetoothInterruptDataSize:%d", len - 3, bluetoothInterruptDataSize);
+            return;
+        }
+
         if (config.pollingRateMode != 2) {
-            memcpy(interrupt_in_data, data + 3, 63);
+            memcpy(interrupt_in_data, data + 3, bluetoothInterruptDataSize);
             return;
         }
 
@@ -83,7 +89,7 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         // We also set the report_dirty flag to true to indicate that new data is available
         //  and needs to be sent in the next interrupt report.
         critical_section_enter_blocking(&report_cs);
-        memcpy(interrupt_in_data, data + 3, 63);
+        memcpy(interrupt_in_data, data + 3, bluetoothInterruptDataSize);
         report_dirty = true;
         critical_section_exit(&report_cs);
     }
@@ -114,7 +120,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 
     if (itf == 1) {
         config.audioActive = (alt != 0);
-        printf("[AUDIO] Set interface Speaker to alternate setting %d\n", alt);
+        LOGI("[AUDIO] Set interface Speaker to alternate setting %d", alt);
     }
 
     return true;
@@ -164,13 +170,13 @@ int main() {
     board_init_after_tusb();
 
     if (const auto ret = cyw43_arch_init(); ret != 0) {
-        printf("Failed to initialize CYW43:%d\n", ret);
+        LOGE("Failed to initialize CYW43:%d", ret);
         return 1;
     }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 
     if (watchdog_caused_reboot()) {
-        printf("Rebooted by Watchdog!\n");
+        LOGW("Rebooted by Watchdog!");
         // 当崩溃重启以后，闪三下灯
         for (int i = 0; i < 6; i++) {
             if (i % 2 == 0) {
@@ -181,7 +187,7 @@ int main() {
             sleep_ms(500);
         }
     } else {
-        printf("Clean boot\n");
+        LOGI("Clean boot");
     }
 
     // Initialize the critical section for the report buffer

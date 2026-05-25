@@ -29,17 +29,8 @@ set(PICO_BOARD pico2_w CACHE STRING "Board type")
 #set(PICO_CYW43_SUPPORTED 1)
 #set(PICO_CYW43_ARCH_THREADSAFE_BACKGROUND 1)
 
-option(ENABLE_VERBOSE "Enable Log Verbose" OFF)
-if(ENABLE_VERBOSE)
-    set(ENABLE_VERBOSE_VALUE 1)
-else()
-    set(ENABLE_VERBOSE_VALUE 0)
-endif ()
-
 set(CYW43_PIO_CLOCK_DIV_VALUE 5)
 set(SYS_CLOCK_KHZ_VALUE 320000)
-
-
 
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
@@ -88,7 +79,6 @@ target_compile_definitions(ds5-bridge PRIVATE
         PICO_FLASH_ASSUME_CORE1_SAFE=1
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
-        ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
 )
 
@@ -116,7 +106,7 @@ target_link_libraries(ds5-bridge
         hardware_timer
         hardware_flash
         pico_btstack_classic
-#        pico_cyw43_arch_threadsafe_background
+        #        pico_cyw43_arch_threadsafe_background
         pico_cyw43_arch_poll
         pico_btstack_cyw43
         tinyusb_device

@@ -35,7 +35,7 @@
 constexpr auto inputChannels = 4;        // 固定不能修改
 constexpr auto hapticChannels = 2;       // 固定不能修改
 constexpr auto audioChannels = 2;        // 固定不能修改
-constexpr auto audioRawElementSize = 3;  // 音频原始数据缓冲buf数量
+constexpr auto audioRawElementSize = 4;  // 音频原始数据缓冲buf数量
 
 constexpr auto readRawFrames = 48;          // 每次读取多少帧原始数据
 constexpr auto rawSamplingRate = 48000;     // 固定不能修改
@@ -71,6 +71,7 @@ static struct {
     int hapticBufPos = 0;
     int audioBufPos = 0;
     bool needSendEndMuteOpusPackage = false;
+    bool needSendFirstMuteOpusPackage = true;
     bool audioWaitData = true;
 } audio{};
 
@@ -140,11 +141,15 @@ inline void processingRemainingData() {
         if (auto* audioBuff = getBufferForSubPacket(subPacketType::audio); audioBuff != nullptr) {
             memcpy(audioBuff, muteOpusPackage, subPacketAudioSize);
             writeSubPacket(audioBuff, subPacketType::audio);
+        } else {
+            LOGW("getBufferForSubPacket audio failed");
         }
 
         if (auto* buffer = getBufferForSubPacket(subPacketType::haptic); buffer != nullptr) {
             memset(buffer, 0, subPacketHapticSize);
             writeSubPacket(buffer, subPacketType::haptic);
+        } else {
+            LOGW("getBufferForSubPacket haptic failed");
         }
     }
 }
@@ -152,6 +157,7 @@ inline void processingRemainingData() {
 void audioLoop() {
     if (tud_audio_available() == 0) {
         if (!config.audioActive) {
+            audio.needSendFirstMuteOpusPackage = true;
             // usb已经停止发送pcm数据了,但是这里需要把剩下的缓存的数据处理完
             processingRemainingData();
         }
@@ -226,6 +232,17 @@ void audioLoop() {
         audio.hapticBuf[audio.hapticBufPos++] = static_cast<int8_t>(std::clamp(valRightChannel, INT8_MIN, INT8_MAX));
 
         if (audio.hapticBufPos == subPacketHapticSize) {
+            // 如果是第一次发送一个静音audio包，避免haptic包等待
+            if (audio.needSendFirstMuteOpusPackage) {
+                audio.needSendFirstMuteOpusPackage = false;
+                if (auto* audioBuff = getBufferForSubPacket(subPacketType::audio); audioBuff != nullptr) {
+                    memcpy(audioBuff, muteOpusPackage, subPacketAudioSize);
+                    writeSubPacket(audioBuff, subPacketType::audio);
+                } else {
+                    LOGW("getBufferForSubPacket failed");
+                }
+            }
+
             writeSubPacket(reinterpret_cast<uint8_t*>(audio.hapticBuf), subPacketType::haptic);
             audio.hapticBuf = nullptr;
             audio.hapticBufPos = 0;
