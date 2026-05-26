@@ -28,6 +28,6 @@ void freeSubPacket(uint8_t* buffer, subPacketType type);
 uint8_t* getBluetoothRawPacket(size_t* size);
 void freeBluetoothRawPacket(uint8_t* bluetoothRawPacket);
 
-size_t getSubPacketSize();
+bool hasBluetoothRawPacketCanSend();
 using onWriteCallbackType = void (*)();
 void setBluetoothSubPacketWriteCallback(onWriteCallbackType callback);
