@@ -95,7 +95,7 @@ On macOS, `tools/build-macos.sh` can prepare a repo-local Pico SDK checkout, pro
 tools/build-macos.sh
 ```
 
-Use `tools/build-macos.sh --standard` for the non-wake firmware, `--clean` to rebuild from scratch, or `--sdk-dir <path>` to use an existing SDK checkout. When using `--sdk-dir`, the script asks before checking that SDK out to the required Pico SDK and TinyUSB versions.
+Use `tools/build-macos.sh --standard` for the non-wake firmware, `--clean` to rebuild from scratch, or `--sdk-dir <path>` to use an existing SDK checkout. When using `--sdk-dir`, the script asks before checking that SDK out to the required Pico SDK and TinyUSB versions. If Homebrew's `arm-none-eabi-gcc` formula is installed without standard C headers, the script asks to install the complete `gcc-arm-embedded` cask and points CMake at that toolchain.
 
 ## Wake-on-PS (optional)
 

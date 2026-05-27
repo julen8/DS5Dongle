@@ -10,6 +10,7 @@ SDK_DIR=""
 DEFAULT_SDK_DIR=""
 USING_DEFAULT_SDK="ON"
 CLEAN_BUILD="OFF"
+PICO_TOOLCHAIN_PATH=""
 
 usage() {
   cat <<'USAGE'
@@ -24,7 +25,7 @@ Options:
   --sdk-dir <path>    Use this Pico SDK checkout instead of .deps/pico-sdk.
   -h, --help          Show this help.
 
-The script prompts before installing missing Homebrew packages.
+The script prompts before installing missing Homebrew packages or casks.
 USAGE
 }
 
@@ -47,6 +48,29 @@ repo_root() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
   cd "$script_dir/.." && pwd -P
+}
+
+compiler_has_headers() {
+  local compiler="$1"
+  local obj
+  obj="$(mktemp "${TMPDIR:-/tmp}/ds5dongle-compiler-test.XXXXXX.o")"
+  printf '#include <stdint.h>\n#include <stdlib.h>\nint main(void) { return 0; }\n' |
+    "$compiler" -x c - -c -o "$obj" >/dev/null 2>&1
+  local status=$?
+  rm -f "$obj"
+  return "$status"
+}
+
+find_arm_cask_toolchain() {
+  local candidate
+  for candidate in /Applications/ArmGNUToolchain/*/arm-none-eabi; do
+    if [[ -x "$candidate/bin/arm-none-eabi-gcc" ]] &&
+      compiler_has_headers "$candidate/bin/arm-none-eabi-gcc"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
 }
 
 while [[ $# -gt 0 ]]; do
@@ -119,7 +143,6 @@ command -v git >/dev/null 2>&1 || die "git is required"
 missing_brew_packages=()
 command -v cmake >/dev/null 2>&1 || missing_brew_packages+=("cmake")
 command -v ninja >/dev/null 2>&1 || missing_brew_packages+=("ninja")
-command -v arm-none-eabi-gcc >/dev/null 2>&1 || missing_brew_packages+=("arm-none-eabi-gcc")
 
 if [[ ${#missing_brew_packages[@]} -gt 0 ]]; then
   command -v brew >/dev/null 2>&1 || die "Homebrew is required to install: ${missing_brew_packages[*]}"
@@ -128,6 +151,26 @@ if [[ ${#missing_brew_packages[@]} -gt 0 ]]; then
     brew install "${missing_brew_packages[@]}"
   else
     die "missing required build dependencies"
+  fi
+fi
+
+if command -v arm-none-eabi-gcc >/dev/null 2>&1 &&
+  compiler_has_headers "$(command -v arm-none-eabi-gcc)"; then
+  echo "Using ARM toolchain: $(command -v arm-none-eabi-gcc)"
+else
+  if PICO_TOOLCHAIN_PATH="$(find_arm_cask_toolchain)"; then
+    echo "Using ARM toolchain: $PICO_TOOLCHAIN_PATH/bin/arm-none-eabi-gcc"
+  else
+    command -v brew >/dev/null 2>&1 || die "Homebrew is required to install gcc-arm-embedded"
+    echo "The available arm-none-eabi-gcc is missing standard C headers."
+    echo "Homebrew's arm-none-eabi-gcc formula is built without newlib headers; this firmware needs the complete Arm GNU toolchain."
+    if confirm "Install the Homebrew gcc-arm-embedded cask?"; then
+      brew install --cask gcc-arm-embedded
+    else
+      die "missing a complete ARM embedded toolchain"
+    fi
+    PICO_TOOLCHAIN_PATH="$(find_arm_cask_toolchain)" || die "gcc-arm-embedded was installed, but no usable toolchain was found"
+    echo "Using ARM toolchain: $PICO_TOOLCHAIN_PATH/bin/arm-none-eabi-gcc"
   fi
 fi
 
@@ -170,11 +213,26 @@ if [[ "$CLEAN_BUILD" == "ON" ]]; then
   rm -rf "$BUILD_DIR"
 fi
 
-echo "Configuring firmware..."
-cmake -S . -B "$BUILD_DIR" -G Ninja \
-  -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-  -DPICO_SDK_PATH="$SDK_DIR" \
+CMAKE_ARGS=(
+  -S .
+  -B "$BUILD_DIR"
+  -G Ninja
+  -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+  -DPICO_SDK_PATH="$SDK_DIR"
   -DENABLE_WAKE_HID="$ENABLE_WAKE_HID"
+)
+
+if [[ -n "$PICO_TOOLCHAIN_PATH" ]]; then
+  CMAKE_ARGS+=(-DPICO_TOOLCHAIN_PATH="$PICO_TOOLCHAIN_PATH")
+  if [[ -f "$BUILD_DIR/CMakeCache.txt" ]] &&
+    ! grep -q "^CMAKE_C_COMPILER:FILEPATH=$PICO_TOOLCHAIN_PATH/bin/arm-none-eabi-gcc$" "$BUILD_DIR/CMakeCache.txt"; then
+    echo "Removing $BUILD_DIR because it was configured with a different ARM compiler."
+    rm -rf "$BUILD_DIR"
+  fi
+fi
+
+echo "Configuring firmware..."
+cmake "${CMAKE_ARGS[@]}"
 
 echo "Building firmware..."
 cmake --build "$BUILD_DIR" --target ds5-bridge
