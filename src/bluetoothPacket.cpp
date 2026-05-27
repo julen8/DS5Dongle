@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "bt.h"
 #include "config.h"
 #include "log.h"
 #include "utils.h"
@@ -66,9 +67,9 @@ constexpr auto subPacketHapticSetupSize = 7;
 constexpr auto ds5BluetoothPacketCrc32Size = 4;
 
 constexpr auto subPacketBuffHapticCount = 4;
-constexpr auto subPacketBuffStatusCount = 4;
+constexpr auto subPacketBuffStatusCount = 2;
 constexpr auto subPacketBuffAudioCount = 4;
-constexpr auto bluetoothRawPacketCount = 4;
+constexpr auto bluetoothRawPacketCount = 3;
 
 extern "C" {
 #ifndef offsetof
@@ -142,7 +143,6 @@ static struct {
     queue_t subPacketStatusQueue{};
     queue_t subPacketAudioQueue{};
 
-    onWriteCallbackType onWriteCallback = nullptr;
     uint8_t reportSeqCounter = 0;
     uint8_t packetCounter = 0;
 
@@ -296,8 +296,8 @@ void writeSubPacket(uint8_t* buffer, const subPacketType type) {
     }
 
     // audio 在另一个core运行，直接调用会有问题
-    if (bluetoothPacket.onWriteCallback != nullptr && type != subPacketType::audio) {
-        bluetoothPacket.onWriteCallback();
+    if (type != subPacketType::audio) {
+        btRequestSend();
     }
 }
 
@@ -371,8 +371,6 @@ bool hasBluetoothRawPacketCanSend() {
     const auto statusCount = queue_get_level(&bluetoothPacket.subPacketStatusQueue);
     return (hapticCount + statusCount + audioCount) > 0;
 }
-
-void setBluetoothSubPacketWriteCallback(const onWriteCallbackType callback) { bluetoothPacket.onWriteCallback = callback; }
 
 // Sub-Packet  0x11: HAPTICS_SETUP（音频配置帧） （共 9 字节）
 /*

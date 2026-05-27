@@ -26,7 +26,6 @@
 
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
-void requestSend();
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
@@ -417,23 +416,19 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     freeBluetoothRawPacket(bluetoothRawPacket);
                 }
 
-                if (hasBluetoothRawPacketCanSend()) {
-                    requestSend();
-                }
+                btRequestSend();
             }
             break;
         }
     }
 }
 
-void requestSend() {
+void btRequestSend() {
     if (hid_interrupt_cid != 0 && !theRequestHasBeenSent && hasBluetoothRawPacketCanSend()) {
         theRequestHasBeenSent = true;
         l2cap_request_can_send_now_event(hid_interrupt_cid);
     }
 }
-
-void onBluetoothSubPacketWrite() { requestSend(); }
 
 std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     // 若为0x81则会请求新内容，其他若有旧数据则不进行请求

@@ -14,6 +14,7 @@
 #include <cmath>
 
 #include "bluetoothPacket.h"
+#include "bt.h"
 #include "config.h"
 #include "log.h"
 #include "utils.h"
@@ -203,6 +204,9 @@ void audioLoop() {
 
                 audio.currentAudioRawElement = nullptr;
                 // Note: next iteration will re-acquire a free element at the top of the loop.
+            } else if (audio.audioBufPos == audioResamplerInputFrames * audioChannels / 2) {
+                // 音频在另外一个core通知发送会有问题，所以在这里来通知，假设到一半的时候opus已经编码好了
+                btRequestSend();
             }
         }
 

@@ -30,4 +30,3 @@ void freeBluetoothRawPacket(uint8_t* bluetoothRawPacket);
 
 bool hasBluetoothRawPacketCanSend();
 using onWriteCallbackType = void (*)();
-void setBluetoothSubPacketWriteCallback(onWriteCallbackType callback);

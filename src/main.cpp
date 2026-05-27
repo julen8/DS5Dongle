@@ -193,7 +193,6 @@ int main() {
     // Initialize the critical section for the report buffer
     critical_section_init(&report_cs);
     bluetoothPacketInit();
-    setBluetoothSubPacketWriteCallback(onBluetoothSubPacketWrite);
     bt_init();
     bt_register_data_callback(on_bt_data);
     audioInit();
