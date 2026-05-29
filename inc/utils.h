@@ -4,8 +4,7 @@
 
 #include <array>
 #include <cstdint>
-#include <iomanip>
-#include <iostream>
+#include <cstdio>
 
 #include "hci_cmd.h"
 
@@ -249,9 +248,9 @@ struct __attribute__((packed)) USBGetStateData { // 63
 /*55  */ uint8_t AesCmac[8];
 };
 
-inline void print_hex(const uint8_t* data,size_t size) {
-    for (int i = 0; i < size; i++) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data[i]) << " ";
+inline void print_hex(const uint8_t* data, size_t size) {
+    for (size_t i = 0; i < size; i++) {
+        printf("%02x ", static_cast<unsigned>(data[i]));
     }
-    std::cout << std::endl;
+    printf("\n");
 }

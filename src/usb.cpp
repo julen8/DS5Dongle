@@ -19,7 +19,7 @@
 //--------------------------------------------------------------------+
 
 static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint8_t *pBuff) {
-    uint8_t channelNum = TU_U16_LOW(p_request->wValue);
+    // uint8_t channelNum = TU_U16_LOW(p_request->wValue);
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
     uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
@@ -35,7 +35,7 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
 
                         config.mute[index] = pBuff[0];
 
-                        TU_LOG2("    Set Mute: %d of entity: %u\r\n", mute[index], entityID);
+                        TU_LOG2("    Set Mute: %d of entity: %u\r\n", config.mute[index], entityID);
                         return true;
 
                     default:
@@ -53,7 +53,7 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                             config.speakerVolume = config.volume[index];
                         }
 
-                        TU_LOG2("    Set Volume: %d dB of entity: %u\r\n", volume[index], entityID);
+                        TU_LOG2("    Set Volume: %d dB of entity: %u\r\n", config.volume[index], entityID);
                         return true;
 
                     default:
@@ -71,7 +71,7 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
 }
 
 static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const *p_request) {
-    uint8_t channelNum = TU_U16_LOW(p_request->wValue);
+    // uint8_t channelNum = TU_U16_LOW(p_request->wValue);
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
     uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;

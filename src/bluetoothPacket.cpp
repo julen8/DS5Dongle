@@ -2,6 +2,7 @@
 
 #include <pico/util/queue.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -87,7 +88,8 @@ struct SubPacketBufferStatus {
     uint8_t buf[subPacketStatusSize];
 };
 struct SubPacketBufferAudio {
-    bool inuse;
+    // audio 缓冲在 core1 分配、core0 释放，使用原子标志避免跨核竞争
+    std::atomic<bool> inuse;
     uint8_t buf[subPacketAudioSize];
 };
 
@@ -193,8 +195,7 @@ inline uint8_t* getSubPacketBufferStatus() {
 
 inline uint8_t* getSubPacketBufferAudio() {
     for (auto& elem : bluetoothPacket.subPacketBufferAudio) {
-        if (!elem.inuse) {
-            elem.inuse = true;
+        if (bool expected = false; elem.inuse.compare_exchange_strong(expected, true)) {
             return elem.buf;
         }
     }
@@ -234,7 +235,7 @@ uint8_t* getBufferForSubPacket(const subPacketType type) {
         case subPacketType::audio:
             return getSubPacketBufferAudio();
         default:
-            LOGE("error subPacketType:%d", type);
+            LOGE("error subPacketType:%d", static_cast<int>(type));
             return nullptr;
     }
 }
@@ -262,7 +263,7 @@ void freeSubPacket(uint8_t* buffer, const subPacketType type) {
             break;
         }
         default:
-            LOGE("error subPacketType:%d", type);
+            LOGE("error subPacketType:%d", static_cast<int>(type));
     }
 }
 
@@ -291,7 +292,7 @@ void writeSubPacket(uint8_t* buffer, const subPacketType type) {
             break;
         }
         default:
-            LOGE("error subPacketType:%d", type);
+            LOGE("error subPacketType:%d", static_cast<int>(type));
             return;
     }
 

@@ -11,6 +11,7 @@
 #include <tusb.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 #include "bluetoothPacket.h"
@@ -33,10 +34,10 @@
  *                         音频重采样:将512frames变成480frames数据，因为opus不能处理512frames为了对齐
  */
 
-constexpr auto inputChannels = 4;        // 固定不能修改
-constexpr auto hapticChannels = 2;       // 固定不能修改
-constexpr auto audioChannels = 2;        // 固定不能修改
-constexpr auto audioRawElementSize = 4;  // 音频原始数据缓冲buf数量
+constexpr auto inputChannels = 4;         // 固定不能修改
+constexpr auto hapticChannels = 2;        // 固定不能修改
+constexpr auto audioChannels = 2;         // 固定不能修改
+constexpr auto audioRawElementSize = 16;  // 音频原始数据缓冲buf数量
 
 constexpr auto readRawFrames = 48;          // 每次读取多少帧原始数据
 constexpr auto rawSamplingRate = 48000;     // 固定不能修改
@@ -58,7 +59,7 @@ constexpr uint8_t muteOpusPackage[] = {
 static_assert(sizeof(muteOpusPackage) == subPacketAudioSize, "sizeof(muteOpusPackage) != subPacketAudioSize");
 
 struct AudioRawElement {
-    bool inuse = false;
+    std::atomic<bool> inuse{false};
     int16_t data[audioResamplerInputFrames * audioChannels]{};
 };
 
@@ -80,8 +81,8 @@ static struct {
 
 inline AudioRawElement* getAudioRawElement() {
     for (auto& elem : audio.audioRawElementArray) {
-        if (!elem.inuse) {
-            elem.inuse = true;
+        // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
+        if (bool expected = false; elem.inuse.compare_exchange_strong(expected, true)) {
             return &elem;
         }
     }
@@ -89,7 +90,7 @@ inline AudioRawElement* getAudioRawElement() {
     return nullptr;
 }
 
-inline void freeAudioRawElement(AudioRawElement* audioRawElement) { audioRawElement->inuse = false; }
+inline void freeAudioRawElement(AudioRawElement* audioRawElement) { audioRawElement->inuse.store(false); }
 
 inline float getAudioGain() {
     static float lastSpeakerVolume = config.speakerVolume;
@@ -109,6 +110,11 @@ inline void processingRemainingData() {
             LOGW("audioBufPos=%d but currentAudioRawElement is null, discarding", audio.audioBufPos);
             audio.audioBufPos = 0;
         } else {
+            // 清零未填满的部分，避免 core1 读取到该缓冲上一轮残留的数据产生杂音
+            for (int i = audio.audioBufPos; i < audioResamplerInputFrames * audioChannels; i++) {
+                audio.currentAudioRawElement->data[i] = 0;
+            }
+
             if (!queue_try_add(&audio.audioRawFifo, static_cast<void*>(&audio.currentAudioRawElement))) {
                 LOGW("audio_fifo add failed");
                 freeAudioRawElement(audio.currentAudioRawElement);

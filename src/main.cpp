@@ -19,65 +19,69 @@
 #include "log.h"
 #include "pico/critical_section.h"
 constexpr auto bluetoothInterruptDataSize = 63;
-static uint8_t interrupt_in_data[] = {0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff,
-                                      0x03, 0x03, 0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00, 0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x09,
-                                      0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00, 0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b};
-static_assert(sizeof(interrupt_in_data) == bluetoothInterruptDataSize, "interrupt_in_data must be 63 bytes long");
+static uint8_t interruptInData[] = {0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff,
+                                    0x03, 0x03, 0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00, 0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x09,
+                                    0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00, 0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b};
+static_assert(sizeof(interruptInData) == bluetoothInterruptDataSize, "interrupt_in_data must be 63 bytes long");
 
-critical_section_t report_cs;
-volatile bool report_dirty = false;
+critical_section_t reportCs;
+volatile bool reportDirty = false;
 
-void interrupt_loop() {
-    if (!tud_hid_ready()) return;
+void interruptLoop() {
+    if (!tud_hid_ready()) {
+        return;
+    }
 
     // TODO: Refactor for better code reuse
     if (config.pollingRateMode != 2) {
-        if (!tud_hid_report(0x01, interrupt_in_data, bluetoothInterruptDataSize)) {
+        if (!tud_hid_report(0x01, interruptInData, bluetoothInterruptDataSize)) {
             LOGE("[USBHID] tud_hid_report error");
         }
         return;
     }
 
-    bool should_send = false;
+    bool shouldSend = false;
     // Local buffer to hold the report data while we prepare it to send.
-    uint8_t safe_report[bluetoothInterruptDataSize];
+    uint8_t safeReport[bluetoothInterruptDataSize];
 
-    critical_section_enter_blocking(&report_cs);
-    if (report_dirty) {
-        memcpy(safe_report, interrupt_in_data, bluetoothInterruptDataSize);
-        report_dirty = false;
-        should_send = true;
+    critical_section_enter_blocking(&reportCs);
+    if (reportDirty) {
+        memcpy(safeReport, interruptInData, bluetoothInterruptDataSize);
+        reportDirty = false;
+        shouldSend = true;
     }
-    critical_section_exit(&report_cs);
+    critical_section_exit(&reportCs);
 
     // Only send to TinyUSB if we actually grabbed fresh data
-    if (should_send) {
-        if (!tud_hid_report(0x01, safe_report, bluetoothInterruptDataSize)) {
+    if (shouldSend) {
+        if (!tud_hid_report(0x01, safeReport, bluetoothInterruptDataSize)) {
             LOGE("[USBHID] tud_hid_report error");
 
             // If the report failed to queue, restore the dirty flag
             // so we try again on the next loop iteration.
-            critical_section_enter_blocking(&report_cs);
-            report_dirty = true;
-            critical_section_exit(&report_cs);
+            critical_section_enter_blocking(&reportCs);
+            reportDirty = true;
+            critical_section_exit(&reportCs);
         }
     }
 }
 
-void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
+void onBtData(const CHANNEL_TYPE channel, const uint8_t *data, const uint16_t len) {
     // LOGD("[Main] BT data callback: channel=%u len=%u", channel, len);
-    if (channel == INTERRUPT && data[1] == 0x31) {
-        if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
-            config.plugHeadset = (data[56] & 1) != 0;
-        }
-
+    // 先做长度/边界校验，避免短包导致越界读
+    if (channel == INTERRUPT && len >= 2 && data[1] == 0x31) {
         if (len - 3 < bluetoothInterruptDataSize) {
             LOGW("(len - 3):%d < bluetoothInterruptDataSize:%d", len - 3, bluetoothInterruptDataSize);
             return;
         }
 
+        // 此时 len >= bluetoothInterruptDataSize + 3 (>=66)，data[56]/interrupt_in_data[53] 均在范围内
+        if ((data[56] & 1) != (interruptInData[53] & 1)) {
+            config.plugHeadset = (data[56] & 1) != 0;
+        }
+
         if (config.pollingRateMode != 2) {
-            memcpy(interrupt_in_data, data + 3, bluetoothInterruptDataSize);
+            memcpy(interruptInData, data + 3, bluetoothInterruptDataSize);
             return;
         }
 
@@ -87,10 +91,10 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         // preventing data corruption and ensuring thread safety.
         // We also set the report_dirty flag to true to indicate that new data is available
         //  and needs to be sent in the next interrupt report.
-        critical_section_enter_blocking(&report_cs);
-        memcpy(interrupt_in_data, data + 3, bluetoothInterruptDataSize);
-        report_dirty = true;
-        critical_section_exit(&report_cs);
+        critical_section_enter_blocking(&reportCs);
+        memcpy(interruptInData, data + 3, bluetoothInterruptDataSize);
+        reportDirty = true;
+        critical_section_exit(&reportCs);
     }
 }
 
@@ -98,28 +102,17 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
 // Application must fill buffer report's content and return its length.
 // Return zero will cause the stack to STALL request
 uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
-    (void)itf;
-    (void)report_id;
-    (void)report_type;
-    (void)buffer;
-    (void)reqlen;
-
-    std::vector<uint8_t> feature_data = get_feature_data(report_id, reqlen);
-    if (!feature_data.empty()) {
-        memcpy(buffer, feature_data.data() + 1, feature_data.size() - 1);
-    }
-
-    return feature_data.empty() ? 0 : feature_data.size() - 1;
+    // 直接写入 TinyUSB 提供的 buffer，避免每次 GET_REPORT 都构造临时 std::vector 造成堆分配/拷贝
+    return getFeatureData(report_id, buffer, reqlen);
 }
 
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
-    (void)rhport;
     uint8_t const itf = tu_u16_low(p_request->wIndex);  // wInterface
     uint8_t const alt = tu_u16_low(p_request->wValue);  // bAlternateSetting
 
     if (itf == 1) {
         config.audioActive = (alt != 0);
-        LOGI("[AUDIO] Set interface Speaker to alternate setting %d", alt);
+        LOGD("[AUDIO] Set interface Speaker to alternate setting %d", alt);
     }
 
     return true;
@@ -130,6 +123,9 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
     // INTERRUPT OUT
     if (report_id == 0) {
+        if (bufsize < 1) {
+            return;
+        }
         switch (buffer[0]) {
             case 0x02: {
                 if (auto *statusBuffer = getBufferForSubPacket(subPacketType::status); statusBuffer != nullptr) {
@@ -152,7 +148,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     if (report_id == 0x80 ||
         // DSE: Write Profile Block
         report_id == 0x60 || report_id == 0x62 || report_id == 0x61) {
-        set_feature_data(report_id, const_cast<uint8_t *>(buffer), bufsize);
+        setFeatureData(report_id, buffer, bufsize);
         return;
     }
 }
@@ -190,10 +186,10 @@ int main() {
     }
 
     // Initialize the critical section for the report buffer
-    critical_section_init(&report_cs);
+    critical_section_init(&reportCs);
     bluetoothPacketInit();
-    bt_init();
-    bt_register_data_callback(on_bt_data);
+    btInit();
+    btRegisterDataCallback(onBtData);
     audioInit();
     watchdog_enable(5000, true);
 
@@ -202,6 +198,6 @@ int main() {
         cyw43_arch_poll();
         tud_task();
         audioLoop();
-        interrupt_loop();
+        interruptLoop();
     }
 }

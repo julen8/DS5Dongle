@@ -70,7 +70,7 @@ target_include_directories(wdl_resampler PUBLIC
 add_subdirectory(lib/opus)
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
-target_compile_options(ds5-bridge PRIVATE -fsigned-char)
+target_compile_options(ds5-bridge PRIVATE -fsigned-char -Wall)
 target_compile_definitions(wdl_resampler PRIVATE
         WDL_RESAMPLE_TYPE=float
 )
