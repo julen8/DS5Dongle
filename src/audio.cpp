@@ -42,8 +42,10 @@ constexpr auto readRawFrames = 48;          // 每次读取多少帧原始数据
 constexpr auto rawSamplingRate = 48000;     // 固定不能修改
 constexpr auto hapticOutSampleRate = 3000;  // 震动重采样输出的采样率
 
-constexpr auto audioResamplerInputFrames = 512;
-constexpr auto audioResamplerOutputFrames = 480;
+constexpr auto audioResamplerOutToOpusInCount = 16;  // 需要把 audioResamplerOutputFrames 的数据累积到 audioResamplerOutToOpusInCount 个才进行一次 opus 编码
+constexpr auto audioResamplerInputFrames = 32;       // 512 / audioResamplerOutToOpusInCount
+constexpr auto audioResamplerOutputFrames = 30;      // 480 / audioResamplerOutToOpusInCount
+constexpr auto audioOpusInFrames = 480;              // opus编码每次输入的帧数，固定为480，不能修改
 
 // 一个静音的opus编码后的包，通过传入静音的pcm编码后得到
 constexpr uint8_t muteOpusPackage[] = {
@@ -57,7 +59,7 @@ static_assert(sizeof(muteOpusPackage) == subPacketAudioSize, "sizeof(muteOpusPac
 
 struct AudioRawElement {
     bool inuse = false;
-    WDL_ResampleSample data[audioResamplerInputFrames * audioChannels]{};
+    int16_t data[audioResamplerInputFrames * audioChannels]{};
 };
 
 static struct {
@@ -107,8 +109,6 @@ inline void processingRemainingData() {
             LOGW("audioBufPos=%d but currentAudioRawElement is null, discarding", audio.audioBufPos);
             audio.audioBufPos = 0;
         } else {
-            memset(audio.currentAudioRawElement->data + audio.audioBufPos, 0, (std::size(audio.currentAudioRawElement->data) - audio.audioBufPos) * sizeof(audio.currentAudioRawElement->data[0]));
-
             if (!queue_try_add(&audio.audioRawFifo, static_cast<void*>(&audio.currentAudioRawElement))) {
                 LOGW("audio_fifo add failed");
                 freeAudioRawElement(audio.currentAudioRawElement);
@@ -182,7 +182,6 @@ void audioLoop() {
         return;
     }
 
-    const float audioGain = getAudioGain();
     for (int i = 0; i < nFrames; i++) {
         if (audio.currentAudioRawElement == nullptr) {
             audio.currentAudioRawElement = getAudioRawElement();
@@ -192,8 +191,8 @@ void audioLoop() {
         }
 
         if (audio.currentAudioRawElement != nullptr) {
-            audio.currentAudioRawElement->data[audio.audioBufPos++] = static_cast<WDL_ResampleSample>(raw[i * inputChannels]) / (INT16_MAX + 1) * audioGain;
-            audio.currentAudioRawElement->data[audio.audioBufPos++] = static_cast<WDL_ResampleSample>(raw[i * inputChannels + 1]) / (INT16_MAX + 1) * audioGain;
+            audio.currentAudioRawElement->data[audio.audioBufPos++] = raw[i * inputChannels];
+            audio.currentAudioRawElement->data[audio.audioBufPos++] = raw[i * inputChannels + 1];
             if (audio.audioBufPos == audioResamplerInputFrames * audioChannels) {
                 audio.audioBufPos = 0;
 
@@ -270,35 +269,56 @@ void core1Entry() {
     audio.audioResampler.SetFeedMode(true);
     audio.audioResampler.Prealloc(audioChannels, audioResamplerInputFrames, audioResamplerOutputFrames);
 
+    uint8_t count = 0;
+    static WDL_ResampleSample opusInBuf[audioOpusInFrames * audioChannels];
+    auto* resampleOutBuf = opusInBuf;
+    AudioRawElement* audioRawElement = nullptr;
+
     for (;;) {
-        AudioRawElement* audioRawElement = nullptr;
         audio.audioWaitData = true;
         queue_remove_blocking(&audio.audioRawFifo, static_cast<void*>(&audioRawElement));
+        if (!config.audioActive) {
+            freeAudioRawElement(audioRawElement);
+            audioRawElement = nullptr;
+            resampleOutBuf = opusInBuf;
+            count = 0;
+            continue;
+        }
         audio.audioWaitData = false;
+
         // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
         WDL_ResampleSample* inBuf = nullptr;
         const int frames = audio.audioResampler.ResamplePrepare(audioResamplerInputFrames, audioChannels, &inBuf);
 
         const int framesToCopy = std::min(frames, audioResamplerInputFrames);
+        const float audioGain = getAudioGain();
         for (int i = 0; i < framesToCopy * audioChannels; i++) {
-            inBuf[i] = audioRawElement->data[i];
+            inBuf[i] = static_cast<WDL_ResampleSample>(audioRawElement->data[i]) / (INT16_MAX + 1) * audioGain;
         }
         freeAudioRawElement(audioRawElement);
+        audioRawElement = nullptr;
 
         if (frames > framesToCopy) {
             LOGI("frames > framesToCopy: %d", frames - framesToCopy);
             memset(inBuf + (framesToCopy * audioChannels), 0, (frames - framesToCopy) * audioChannels * sizeof(WDL_ResampleSample));
         }
 
-        static WDL_ResampleSample resampleOutBuf[audioResamplerOutputFrames * audioChannels];
         audio.audioResampler.ResampleOut(resampleOutBuf, frames, audioResamplerOutputFrames, audioChannels);
+        resampleOutBuf += audioResamplerOutputFrames * audioChannels;
+
+        if (++count < audioResamplerOutToOpusInCount) {
+            continue;
+        }
+
+        resampleOutBuf = opusInBuf;
+        count = 0;
 
         auto* audioOut = getBufferForSubPacket(subPacketType::audio);
         if (audioOut == nullptr) {
             LOGW("Opus get out buf err");
             continue;
         }
-        if (const auto ret = opus_encode_float(audio.encoder, resampleOutBuf, audioResamplerOutputFrames, audioOut, subPacketAudioSize); ret < 0) {
+        if (const auto ret = opus_encode_float(audio.encoder, opusInBuf, audioOpusInFrames, audioOut, subPacketAudioSize); ret < 0) {
             LOGE("opus_encode_float failed:%d", ret);
             freeSubPacket(audioOut, subPacketType::audio);
             continue;
