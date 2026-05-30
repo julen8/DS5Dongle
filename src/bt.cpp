@@ -9,7 +9,6 @@
 #include <classic/sdp_server.h>
 #include <l2cap.h>
 #include <pico/cyw43_arch.h>
-#include <pico/util/queue.h>
 
 #include <algorithm>
 #include <cstdio>

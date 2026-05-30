@@ -2,22 +2,22 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include <bsp/board_api.h>
+#include <hardware/clocks.h>
+#include <hardware/vreg.h>
+#include <hardware/watchdog.h>
+#include <pico/critical_section.h>
+#include <pico/cyw43_arch.h>
+
 #include <cstdio>
 
 #include "audio.h"
-#include "bsp/board_api.h"
+#include "bluetoothPacket.h"
 #include "bt.h"
 #include "config.h"
-#include "hardware/clocks.h"
-#include "hardware/vreg.h"
-#include "hardware/watchdog.h"
-#include "pico/cyw43_arch.h"
+#include "log.h"
 #include "utils.h"
 
-// Pico SDK speciifically for waiting on conditions
-#include "bluetoothPacket.h"
-#include "log.h"
-#include "pico/critical_section.h"
 constexpr auto bluetoothInterruptDataSize = 63;
 static uint8_t interruptInData[] = {0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff,
                                     0x03, 0x03, 0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00, 0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x09,
