@@ -68,7 +68,7 @@ constexpr auto subPacketHapticSetupSize = 7;
 constexpr auto ds5BluetoothPacketCrc32Size = 4;
 
 constexpr auto subPacketBuffHapticCount = 4;
-constexpr auto subPacketBuffStatusCount = 2;
+constexpr auto subPacketBuffStatusCount = 4;
 constexpr auto subPacketBuffAudioCount = 4;
 constexpr auto bluetoothRawPacketCount = 3;
 

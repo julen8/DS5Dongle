@@ -65,7 +65,6 @@ struct AudioRawElement {
 
 static struct {
     alignas(8) uint32_t audio_core1_stack[8192];
-    WDL_Resampler hapticResampler{};
     WDL_Resampler audioResampler{};
     OpusEncoder* encoder = nullptr;
     queue_t audioRawFifo;
@@ -181,14 +180,8 @@ void audioLoop() {
 
     audio.needSendEndMuteOpusPackage = true;
 
-    WDL_ResampleSample* hapticResampleInBuf = nullptr;
-    const int nFrames = audio.hapticResampler.ResamplePrepare(static_cast<int>(actualRawFrames), hapticChannels, &hapticResampleInBuf);
-    if (hapticResampleInBuf == nullptr) {
-        LOGE("hapticResampleInBuf is null");
-        return;
-    }
-
-    for (int i = 0; i < nFrames; i++) {
+    // ── 1. 音频原始数据缓冲（送 core1 重采样 + Opus 编码）
+    for (uint32_t i = 0; i < actualRawFrames; i++) {
         if (audio.currentAudioRawElement == nullptr) {
             audio.currentAudioRawElement = getAudioRawElement();
             if (audio.currentAudioRawElement == nullptr) {
@@ -208,25 +201,30 @@ void audioLoop() {
                 }
 
                 audio.currentAudioRawElement = nullptr;
-                // Note: next iteration will re-acquire a free element at the top of the loop.
             } else if (audio.audioBufPos == audioResamplerInputFrames * audioChannels / 2) {
                 // 音频在另外一个core通知发送会有问题，所以在这里来通知，假设到一半的时候opus已经编码好了
                 btRequestSend();
             }
         }
-
-        hapticResampleInBuf[i * 2] = static_cast<WDL_ResampleSample>(raw[i * inputChannels + 2]) / (INT16_MAX + 1);
-        hapticResampleInBuf[i * 2 + 1] = static_cast<WDL_ResampleSample>(raw[i * inputChannels + 3]) / (INT16_MAX + 1);
     }
 
-    // 3. 48kHz -> 3kHz 重采样
-    // actual: nFrames / (rawSamplingRate / hapticOutSampleRate) * hapticOutputChannels
-    // max : readRawFrames / (rawSamplingRate / hapticOutSampleRate) * hapticOutputChannels
-    static WDL_ResampleSample hapticResampleOutBuf[readRawFrames / (rawSamplingRate / hapticOutSampleRate) * hapticChannels];
-    const int hapticResampleOutFrames = audio.hapticResampler.ResampleOut(hapticResampleOutBuf, nFrames, nFrames / (rawSamplingRate / hapticOutSampleRate), hapticChannels);
+    // ── 2. 震动：整数 box-filter 抽取 48kHz→3kHz（16:1）
+    // 每组 16 个 int16 样本累加 → 算术右移 12 位（>>4 平均 + >>8 缩放 int16→int8）
+    // 最大值：16×32767=524272，>>12=127，恰好适配 int8
+    constexpr int hapticDecimFactor = rawSamplingRate / hapticOutSampleRate;  // = 16
+    const int hapticOutFrames = static_cast<int>(actualRawFrames) / hapticDecimFactor;
 
-    // 4. 转换为int8并缓冲，满64字节即组包发送
-    for (int i = 0; i < hapticResampleOutFrames; i++) {
+    for (int i = 0; i < hapticOutFrames; i++) {
+        int32_t sumL = 0, sumR = 0;
+        const int base = i * hapticDecimFactor;
+        for (int j = 0; j < hapticDecimFactor; j++) {
+            sumL += raw[(base + j) * inputChannels + 2];
+            sumR += raw[(base + j) * inputChannels + 3];
+        }
+        // 16×max_int16=524272, >>12=127; 16×min_int16=-524288, >>12=-128 → 值域恰好 [-128,127]
+        const auto outL = static_cast<int8_t>(sumL >> 12);
+        const auto outR = static_cast<int8_t>(sumR >> 12);
+
         if (audio.hapticBuf == nullptr) {
             audio.hapticBuf = reinterpret_cast<int8_t*>(getBufferForSubPacket(subPacketType::haptic));
             if (audio.hapticBuf == nullptr) {
@@ -235,10 +233,8 @@ void audioLoop() {
             }
         }
 
-        int valLeftChannel = static_cast<int>(hapticResampleOutBuf[i * 2] * (INT8_MAX + 1));
-        int valRightChannel = static_cast<int>(hapticResampleOutBuf[i * 2 + 1] * (INT8_MAX + 1));
-        audio.hapticBuf[audio.hapticBufPos++] = static_cast<int8_t>(std::clamp(valLeftChannel, INT8_MIN, INT8_MAX));
-        audio.hapticBuf[audio.hapticBufPos++] = static_cast<int8_t>(std::clamp(valRightChannel, INT8_MIN, INT8_MAX));
+        audio.hapticBuf[audio.hapticBufPos++] = outL;
+        audio.hapticBuf[audio.hapticBufPos++] = outR;
 
         if (audio.hapticBufPos == subPacketHapticSize) {
             // 如果是第一次发送一个静音audio包，避免haptic包等待
@@ -260,21 +256,6 @@ void audioLoop() {
 }
 
 void core1Entry() {
-    int error = 0;
-    audio.encoder = opus_encoder_create(48000, audioChannels, OPUS_APPLICATION_AUDIO, &error);
-    if (error != 0) {
-        LOGE("OpusEncoder create failed");
-        return;
-    }
-    opus_encoder_ctl(audio.encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
-    opus_encoder_ctl(audio.encoder, OPUS_SET_BITRATE(200 * 8 * 100));
-    opus_encoder_ctl(audio.encoder, OPUS_SET_VBR(false));
-    opus_encoder_ctl(audio.encoder, OPUS_SET_COMPLEXITY(0));  // max 4
-    audio.audioResampler.SetMode(true, 0, false);
-    audio.audioResampler.SetRates(51200, 48000);
-    audio.audioResampler.SetFeedMode(true);
-    audio.audioResampler.Prealloc(audioChannels, audioResamplerInputFrames, audioResamplerOutputFrames);
-
     uint8_t count = 0;
     static WDL_ResampleSample opusInBuf[audioOpusInFrames * audioChannels];
     auto* resampleOutBuf = opusInBuf;
@@ -334,10 +315,30 @@ void core1Entry() {
 }
 
 void audioInit() {
-    audio.hapticResampler.SetMode(true, 0, false);
-    audio.hapticResampler.SetRates(rawSamplingRate, hapticOutSampleRate);
-    audio.hapticResampler.SetFeedMode(true);
-    audio.hapticResampler.Prealloc(hapticChannels, readRawFrames, readRawFrames / (rawSamplingRate / hapticOutSampleRate));  // 每次输入 48 帧，输出 3 帧（48/16）
+
+    audio.audioResampler.SetMode(true, 0, false);
+    audio.audioResampler.SetRates(51200, 48000);
+    audio.audioResampler.SetFeedMode(true);
+    audio.audioResampler.Prealloc(audioChannels, audioResamplerInputFrames, audioResamplerOutputFrames);
+
+    int error = 0;
+    // RESTRICTED_LOWDELAY: 强制纯 CELT，跳过 SILK/Hybrid 模式决策和 look-ahead 分析
+    // 相比 AUDIO 模式降低 CPU 占用并减少编码延迟，且在此码率下 TOC 字节相同，不影响 muteOpusPackage
+    audio.encoder = opus_encoder_create(48000, audioChannels, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &error);
+    if (error != 0) {
+        LOGE("OpusEncoder create failed");
+        return;
+    }
+    opus_encoder_ctl(audio.encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
+    // 码率 = 200字节 × 8bit × 100fps = 160kbps，确保每帧 CBR 输出恰好 200 字节以匹配协议
+    opus_encoder_ctl(audio.encoder, OPUS_SET_BITRATE(200 * 8 * 100));
+    opus_encoder_ctl(audio.encoder, OPUS_SET_VBR(false));
+    opus_encoder_ctl(audio.encoder, OPUS_SET_COMPLEXITY(0));  // 范围 0-10，0 最低复杂度
+    // 告知编码器输入精度为 int16（经 float 转换而来），避免按默认 24bit 精度处理
+    opus_encoder_ctl(audio.encoder, OPUS_SET_LSB_DEPTH(16));
+    // 禁用帧间预测：每帧独立可解码，蓝牙丢包不影响后续帧，轻微降低 CPU
+    opus_encoder_ctl(audio.encoder, OPUS_SET_PREDICTION_DISABLED(1));
+
     queue_init(&audio.audioRawFifo, sizeof(AudioRawElement*), audioRawElementSize);
     multicore_launch_core1_with_stack(core1Entry, audio.audio_core1_stack, sizeof(audio.audio_core1_stack));
 }

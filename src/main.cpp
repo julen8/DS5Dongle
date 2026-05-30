@@ -159,6 +159,8 @@ int main() {
     set_sys_clock_khz(SYS_CLOCK_KHZ, true);
 
     board_init();
+    printf("\n\n===================\nBuild Time: " __DATE__ " " __TIME__ "\n===================\n\n");
+
     constexpr tusb_rhport_init_t devInit = {.role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_FULL};
     tusb_init(BOARD_TUD_RHPORT, &devInit);
     tud_disconnect();
@@ -196,6 +198,7 @@ int main() {
     for (;;) {
         watchdog_update();
         cyw43_arch_poll();
+        interruptLoop();
         tud_task();
         audioLoop();
         interruptLoop();
