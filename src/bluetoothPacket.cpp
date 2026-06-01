@@ -67,9 +67,9 @@ constexpr auto subPacketHapticSetupSize = 7;
 
 constexpr auto ds5BluetoothPacketCrc32Size = 4;
 
-constexpr auto subPacketBuffHapticCount = 4;
-constexpr auto subPacketBuffStatusCount = 4;
-constexpr auto subPacketBuffAudioCount = 4;
+constexpr auto subPacketBuffHapticCount = 2;
+constexpr auto subPacketBuffStatusCount = 2;
+constexpr auto subPacketBuffAudioCount = 2;
 constexpr auto bluetoothRawPacketCount = 3;
 
 extern "C" {
@@ -80,11 +80,11 @@ extern "C" {
 #define container_of(ptr, type, member) ({ (type*)((char*)(ptr) - offsetof(type, member)); })
 
 struct SubPacketBufferHaptic {
-    bool inuse;
+    volatile bool inuse;
     uint8_t buf[subPacketHapticSize];
 };
 struct SubPacketBufferStatus {
-    bool inuse;
+    volatile bool inuse;
     uint8_t buf[subPacketStatusSize];
 };
 struct SubPacketBufferAudio {
@@ -151,17 +151,37 @@ static struct {
 } bluetoothPacket{};
 }
 
-inline uint8_t* getSubPacketBufferHaptic() {
+inline uint8_t* tryGetSubPacketBufferHaptic() {
     for (auto& elem : bluetoothPacket.subPacketBufferHaptic) {
         if (!elem.inuse) {
             elem.inuse = true;
-            LOGD("haptic pkt:%p", &elem);
             return elem.buf;
         }
     }
 
-    LOGE("No free subPacketBufferHaptic");
     return nullptr;
+}
+
+void cleanAllCachedHaptic() {
+    uint8_t* hapticData = nullptr;
+    while (queue_try_remove(&bluetoothPacket.subPacketHapticQueue, static_cast<void*>(&hapticData))) {
+        if (hapticData != nullptr) {
+            freeSubPacket(hapticData, subPacketType::haptic);
+        }
+    }
+}
+
+inline uint8_t* getSubPacketBufferHaptic() {
+    auto* ret = tryGetSubPacketBufferHaptic();
+    if (ret == nullptr) {
+        cleanAllCachedHaptic();
+        ret = tryGetSubPacketBufferHaptic();
+    }
+
+    if (ret == nullptr) {
+        LOGE("No free subPacketBufferHaptic");
+    }
+    return ret;
 }
 
 inline uint8_t* tryGetSubPacketBufferStatus() {
@@ -180,10 +200,12 @@ inline uint8_t* getSubPacketBufferStatus() {
     if (ret == nullptr) {
         // status 只需要有最后一次的就行
         uint8_t* statusData = nullptr;
-        queue_try_remove(&bluetoothPacket.subPacketStatusQueue, static_cast<void*>(&statusData));
-        if (statusData != nullptr) {
-            freeSubPacket(statusData, subPacketType::status);
+        while (queue_try_remove(&bluetoothPacket.subPacketStatusQueue, static_cast<void*>(&statusData))) {
+            if (statusData != nullptr) {
+                freeSubPacket(statusData, subPacketType::status);
+            }
         }
+
         ret = tryGetSubPacketBufferStatus();
     }
 
@@ -193,15 +215,36 @@ inline uint8_t* getSubPacketBufferStatus() {
     return ret;
 }
 
-inline uint8_t* getSubPacketBufferAudio() {
+inline uint8_t* tryGetSubPacketBufferAudio() {
     for (auto& elem : bluetoothPacket.subPacketBufferAudio) {
         if (bool expected = false; elem.inuse.compare_exchange_strong(expected, true)) {
             return elem.buf;
         }
     }
 
-    LOGE("No free subPacketBufferAudio");
     return nullptr;
+}
+
+void cleanAllCachedAudio() {
+    uint8_t* audioData = nullptr;
+    while (queue_try_remove(&bluetoothPacket.subPacketAudioQueue, static_cast<void*>(&audioData))) {
+        if (audioData != nullptr) {
+            freeSubPacket(audioData, subPacketType::audio);
+        }
+    }
+}
+
+inline uint8_t* getSubPacketBufferAudio() {
+    auto* ret = tryGetSubPacketBufferAudio();
+    if (ret == nullptr) {
+        cleanAllCachedAudio();
+        ret = tryGetSubPacketBufferAudio();
+    }
+
+    if (ret == nullptr) {
+        LOGE("No free subPacketBufferAudio");
+    }
+    return ret;
 }
 
 void bluetoothPacketInit() {
@@ -253,7 +296,6 @@ void freeSubPacket(uint8_t* buffer, const subPacketType type) {
         }
         case subPacketType::haptic: {
             auto* pkt = container_of(buffer, SubPacketBufferHaptic, buf);
-            LOGD("haptic pkt:%p", pkt);
             pkt->inuse = false;
             break;
         }
@@ -268,7 +310,6 @@ void freeSubPacket(uint8_t* buffer, const subPacketType type) {
 }
 
 void writeSubPacket(uint8_t* buffer, const subPacketType type) {
-    LOGD("type:%d", type);
     switch (type) {
         case subPacketType::status: {
             if (!queue_try_add(&bluetoothPacket.subPacketStatusQueue, static_cast<void*>(&buffer))) {
@@ -489,7 +530,7 @@ inline BluetoothRawPacket* packed(const uint8_t* statusData, const std::array<ui
     if (offset + ds5BluetoothPacketCrc32Size < pkt->size) {
         memset(pkt->data + offset, 0, pkt->size - offset - ds5BluetoothPacketCrc32Size);
     } else if (offset + ds5BluetoothPacketCrc32Size > pkt->size) {
-        LOGE("packet size is too small:offset + ds5BluetoothPacketCrc32Size:%d, pkt->size:%d", offset + ds5BluetoothPacketCrc32Size, pkt->size);
+        LOGE("packet size is too small:offset + ds5BluetoothPacketCrc32Size:%d, pkt->size:%d, pkt->data[1]:%02X", offset + ds5BluetoothPacketCrc32Size, pkt->size, pkt->data[1]);
     }
 
     fill_output_report_checksum(pkt->data + bluetoothRawPacketHeadSize, pkt->size - bluetoothRawPacketHeadSize);
@@ -505,7 +546,7 @@ uint8_t* getBluetoothRawPacket(size_t* size) {
     // 优先尝试拿两个hapticData
     queue_try_remove(&bluetoothPacket.subPacketHapticQueue, static_cast<void*>(&hapticData[0]));
     queue_try_remove(&bluetoothPacket.subPacketHapticQueue, static_cast<void*>(&hapticData[1]));
-    for (const auto* const ptr : hapticData) {
+    for (const auto* ptr : hapticData) {
         if (ptr != nullptr) {
             pktSize += subPacketHeadSize;
             pktSize += subPacketHapticSize;
@@ -519,7 +560,7 @@ uint8_t* getBluetoothRawPacket(size_t* size) {
         queue_try_remove(&bluetoothPacket.subPacketAudioQueue, static_cast<void*>(&audioData[1]));
     }
 
-    for (const auto* const ptr : audioData) {
+    for (const auto* ptr : audioData) {
         if (ptr != nullptr) {
             pktSize += subPacketHeadSize;
             pktSize += subPacketAudioSize;
@@ -559,15 +600,15 @@ uint8_t* getBluetoothRawPacket(size_t* size) {
     // 7
 
     // 可以判断一下是否还能再装一个audioData (当只有一个hapticData + 一个audioData + 没有statusData的时候，剩余空间是够的)
-    if (bluetoothRawPacketDataSize0x39 - pktSize > subPacketHeadSize + subPacketAudioSize) {
-        if (audioData[0] == nullptr && audioData[1] != nullptr) {
-            audioData[0] = audioData[1];
-            audioData[1] = nullptr;
+    if ((bluetoothRawPacketDataSize0x39 - pktSize) > (subPacketHeadSize + subPacketAudioSize)) {
+        if (audioData.at(0) == nullptr && audioData.at(1) != nullptr) {
+            audioData.at(0) = audioData.at(1);
+            audioData.at(1) = nullptr;
         }
 
-        if (audioData[1] == nullptr) {
-            queue_try_remove(&bluetoothPacket.subPacketAudioQueue, static_cast<void*>(&audioData[1]));
-            if (audioData[1] != nullptr) {
+        if (audioData.at(1) == nullptr) {
+            queue_try_remove(&bluetoothPacket.subPacketAudioQueue, static_cast<void*>(&audioData.at(1)));
+            if (audioData.at(1) != nullptr) {
                 pktSize += subPacketHeadSize;
                 pktSize += subPacketAudioSize;
                 // 202
@@ -581,19 +622,19 @@ uint8_t* getBluetoothRawPacket(size_t* size) {
 
     auto* pkt = newBluetoothRawPacket(pktSize);
     if (pkt == nullptr) {
-        freeSubPacket(hapticData[0], subPacketType::haptic);
-        freeSubPacket(hapticData[1], subPacketType::haptic);
-        freeSubPacket(audioData[0], subPacketType::audio);
-        freeSubPacket(audioData[1], subPacketType::audio);
+        freeSubPacket(hapticData.at(0), subPacketType::haptic);
+        freeSubPacket(hapticData.at(1), subPacketType::haptic);
+        freeSubPacket(audioData.at(0), subPacketType::audio);
+        freeSubPacket(audioData.at(1), subPacketType::audio);
         freeSubPacket(statusData, subPacketType::status);
         return nullptr;
     }
 
     packed(statusData, hapticData, audioData, pkt);
-    freeSubPacket(hapticData[0], subPacketType::haptic);
-    freeSubPacket(hapticData[1], subPacketType::haptic);
-    freeSubPacket(audioData[0], subPacketType::audio);
-    freeSubPacket(audioData[1], subPacketType::audio);
+    freeSubPacket(hapticData.at(0), subPacketType::haptic);
+    freeSubPacket(hapticData.at(1), subPacketType::haptic);
+    freeSubPacket(audioData.at(0), subPacketType::audio);
+    freeSubPacket(audioData.at(1), subPacketType::audio);
     freeSubPacket(statusData, subPacketType::status);
 
     *size = pkt->size;

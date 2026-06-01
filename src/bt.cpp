@@ -176,7 +176,7 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
         case HCI_EVENT_COMMAND_STATUS: {
             const uint8_t status = hci_event_command_status_get_status(packet);
             const uint16_t opcode = hci_event_command_status_get_command_opcode(packet);
-            LOGI("[HCI] CmdStatus %s(0x%04X) status=0x%02X", opcode_to_str(opcode), opcode, status);
+            LOGI("[HCI] CmdStatus (0x%04X) status=0x%02X", opcode, status);
             if (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION && status != ERROR_CODE_SUCCESS) {
                 deviceFound = false;
                 newPair = false;
@@ -189,7 +189,7 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
         case HCI_EVENT_COMMAND_COMPLETE: {
             const uint8_t status = hci_event_command_complete_get_return_parameters(packet)[0];
             const uint16_t opcode = hci_event_command_complete_get_command_opcode(packet);
-            LOGI("[HCI] CmdComplete %s(0x%04X) status=0x%02X", opcode_to_str(opcode), opcode, status);
+            LOGI("[HCI] CmdComplete (0x%04X) status=0x%02X", opcode, status);
             break;
         }
 
@@ -365,7 +365,7 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
                 } else {
                     LOGW("[L2CAP] Feature slot full, drop Report 0x%02X", reportId);
                 }
-                LOGD("[L2CAP] Stored Feature Report 0x%02X, len=%u", report_id, storeLen - 1);
+                LOGD("[L2CAP] Stored Feature Report 0x%02X, len=%u", reportId, storeLen - 1);
             }
 
             LOGD("[L2CAP] HID Control data len=%u", size);
@@ -524,7 +524,7 @@ void setFeatureData(const uint8_t reportId, const uint8_t* data, const uint16_t 
 
         LOGD("[L2CAP] Requesting Set Feature Report 0x%02X", reportId);
 #if ENABLE_DEBUG
-        printf_hexdump(get_feature, len + 2);
+        printf_hexdump(getFeature, len + 2);
 #endif
     }
 }

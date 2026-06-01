@@ -29,4 +29,6 @@ uint8_t* getBluetoothRawPacket(size_t* size);
 void freeBluetoothRawPacket(uint8_t* bluetoothRawPacket);
 
 bool hasBluetoothRawPacketCanSend();
-using onWriteCallbackType = void (*)();
+
+void cleanAllCachedAudio();
+void cleanAllCachedHaptic();

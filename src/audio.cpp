@@ -73,9 +73,10 @@ static struct {
     AudioRawElement* currentAudioRawElement = nullptr;
     int hapticBufPos = 0;
     int audioBufPos = 0;
-    bool needSendEndMuteOpusPackage = false;
+    bool needClean = false;
     bool needSendFirstMuteOpusPackage = true;
-    bool audioWaitData = true;
+    // audioWaitData 由 core1 写、core0 读，须加 volatile 确保跨核可见
+    volatile bool audioWaitData = true;
 } audio{};
 
 inline AudioRawElement* getAudioRawElement() {
@@ -103,69 +104,41 @@ inline float getAudioGain() {
     return (config.mute[0] == 0) ? audioGain : 0.0F;
 }
 
-inline void processingRemainingData() {
-    if (audio.audioBufPos != 0) {
-        if (audio.currentAudioRawElement == nullptr) {
-            LOGW("audioBufPos=%d but currentAudioRawElement is null, discarding", audio.audioBufPos);
-            audio.audioBufPos = 0;
-        } else {
-            // 清零未填满的部分，避免 core1 读取到该缓冲上一轮残留的数据产生杂音
-            for (int i = audio.audioBufPos; i < audioResamplerInputFrames * audioChannels; i++) {
-                audio.currentAudioRawElement->data[i] = 0;
-            }
-
-            if (!queue_try_add(&audio.audioRawFifo, static_cast<void*>(&audio.currentAudioRawElement))) {
+inline void cleanRemainingData() {
+    {
+        auto* audioRawElement = audio.currentAudioRawElement;
+        if (audioRawElement == nullptr) {
+            audioRawElement = getAudioRawElement();
+        }
+        if (audioRawElement != nullptr) {
+            if (!queue_try_add(&audio.audioRawFifo, static_cast<void*>(&audioRawElement))) {
                 LOGW("audio_fifo add failed");
-                freeAudioRawElement(audio.currentAudioRawElement);
+                freeAudioRawElement(audioRawElement);
             }
-
-            audio.currentAudioRawElement = nullptr;
-            audio.audioBufPos = 0;
         }
-
-        return;
     }
 
-    uint8_t* hapticBuf = nullptr;
-    if (audio.hapticBufPos != 0) {
-        memset(audio.hapticBuf + audio.hapticBufPos, 0, subPacketHapticSize - audio.hapticBufPos);
+    {
+        freeSubPacket(reinterpret_cast<uint8_t*>(audio.hapticBuf), subPacketType::haptic);
         audio.hapticBufPos = 0;
-        hapticBuf = reinterpret_cast<uint8_t*>(audio.hapticBuf);
         audio.hapticBuf = nullptr;
+        audio.audioBufPos = 0;
+        audio.currentAudioRawElement = nullptr;
     }
 
-    if (hapticBuf != nullptr) {
-        writeSubPacket(hapticBuf, subPacketType::haptic);
-        audio.needSendEndMuteOpusPackage = true;
-        return;
-    }
-
-    // 补发一个静音包，避免下次开始播放时出现一个杂音
-    if (audio.audioWaitData && audio.needSendEndMuteOpusPackage) {
-        audio.needSendEndMuteOpusPackage = false;
-
-        if (auto* audioBuff = getBufferForSubPacket(subPacketType::audio); audioBuff != nullptr) {
-            memcpy(audioBuff, muteOpusPackage, subPacketAudioSize);
-            writeSubPacket(audioBuff, subPacketType::audio);
-        } else {
-            LOGW("getBufferForSubPacket audio failed");
-        }
-
-        if (auto* buffer = getBufferForSubPacket(subPacketType::haptic); buffer != nullptr) {
-            memset(buffer, 0, subPacketHapticSize);
-            writeSubPacket(buffer, subPacketType::haptic);
-        } else {
-            LOGW("getBufferForSubPacket haptic failed");
-        }
-    }
+    cleanAllCachedAudio();
+    cleanAllCachedHaptic();
 }
 
 void audioLoop() {
     if (tud_audio_available() == 0) {
         if (!config.audioActive) {
-            audio.needSendFirstMuteOpusPackage = true;
             // usb已经停止发送pcm数据了,但是这里需要把剩下的缓存的数据处理完
-            processingRemainingData();
+            if (audio.needClean) {
+                audio.needClean = false;
+                audio.needSendFirstMuteOpusPackage = true;
+                cleanRemainingData();
+            }
         }
 
         return;
@@ -178,7 +151,7 @@ void audioLoop() {
         return;
     }
 
-    audio.needSendEndMuteOpusPackage = true;
+    audio.needClean = true;
 
     // ── 1. 音频原始数据缓冲（送 core1 重采样 + Opus 编码）
     for (uint32_t i = 0; i < actualRawFrames; i++) {
@@ -265,6 +238,7 @@ void core1Entry() {
         audio.audioWaitData = true;
         queue_remove_blocking(&audio.audioRawFifo, static_cast<void*>(&audioRawElement));
         if (!config.audioActive) {
+            audio.audioResampler.Reset();
             freeAudioRawElement(audioRawElement);
             audioRawElement = nullptr;
             resampleOutBuf = opusInBuf;
@@ -310,12 +284,15 @@ void core1Entry() {
             freeSubPacket(audioOut, subPacketType::audio);
             continue;
         }
-        writeSubPacket(audioOut, subPacketType::audio);
+        if (config.audioActive) {
+            writeSubPacket(audioOut, subPacketType::audio);
+        } else {
+            freeSubPacket(audioOut, subPacketType::audio);
+        }
     }
 }
 
 void audioInit() {
-
     audio.audioResampler.SetMode(true, 0, false);
     audio.audioResampler.SetRates(51200, 48000);
     audio.audioResampler.SetFeedMode(true);
