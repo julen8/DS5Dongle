@@ -69,8 +69,9 @@ target_include_directories(wdl_resampler PUBLIC
 #set(OPUS_FIXED_POINT ON)
 add_subdirectory(lib/opus)
 
-target_compile_options(wdl_resampler PRIVATE -fsigned-char)
-target_compile_options(ds5-bridge PRIVATE -fsigned-char -Wall)
+target_compile_options(wdl_resampler PRIVATE -fsigned-char -O3 -mfloat-abi=softfp)
+target_compile_options(ds5-bridge PRIVATE -fsigned-char -Wall -O3 -Wdouble-promotion -mfloat-abi=softfp)
+target_compile_options(opus PRIVATE -O3 -mfloat-abi=softfp)
 target_compile_definitions(wdl_resampler PRIVATE
         WDL_RESAMPLE_TYPE=float
 )
@@ -98,7 +99,6 @@ target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Add any user requested libraries
 target_link_libraries(ds5-bridge
         pico_stdlib
         pico_multicore

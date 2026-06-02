@@ -71,6 +71,7 @@ static struct {
     AudioRawElement audioRawElementArray[audioRawElementSize]{};
     int8_t* hapticBuf = nullptr;
     AudioRawElement* currentAudioRawElement = nullptr;
+    uint32_t rawPos = 0;
     int hapticBufPos = 0;
     int audioBufPos = 0;
     bool needClean = false;
@@ -120,6 +121,7 @@ inline void cleanRemainingData() {
 
     {
         freeSubPacket(reinterpret_cast<uint8_t*>(audio.hapticBuf), subPacketType::haptic);
+        audio.rawPos = 0;
         audio.hapticBufPos = 0;
         audio.hapticBuf = nullptr;
         audio.audioBufPos = 0;
@@ -145,12 +147,23 @@ void audioLoop() {
     }
 
     static int16_t raw[readRawFrames * inputChannels];
-    const auto bytesRead = tud_audio_read(raw, sizeof(raw));
+    const auto bytesRead = tud_audio_read(raw + (audio.rawPos * inputChannels), sizeof(raw) - (audio.rawPos * inputChannels) * sizeof(int16_t));
     const auto actualRawFrames = bytesRead / (inputChannels * sizeof(int16_t));
+    if (bytesRead % (inputChannels * sizeof(int16_t)) != 0) {
+        LOGW("bytesRead %% (inputChannels * sizeof(int16_t)):%d", bytesRead % (inputChannels * sizeof(int16_t)));
+    }
     if (actualRawFrames == 0) {
         return;
     }
+    audio.rawPos += actualRawFrames;
+    if (audio.rawPos < readRawFrames) {
+        return;
+    }
+    if (audio.rawPos != readRawFrames) {
+        LOGW("actualRawFrames != readRawFrames: %d", actualRawFrames);
+    }
 
+    audio.rawPos = 0;
     audio.needClean = true;
 
     // ── 1. 音频原始数据缓冲（送 core1 重采样 + Opus 编码）
@@ -181,7 +194,8 @@ void audioLoop() {
         }
     }
 
-    // ── 2. 震动：整数 box-filter 抽取 48kHz→3kHz（16:1）
+    // ── 2. 震动：48kHz→3kHz（16:1）
+    // 整数 box-filter 抽取 48kHz→3kHz（16:1）
     // 每组 16 个 int16 样本累加 → 算术右移 12 位（>>4 平均 + >>8 缩放 int16→int8）
     // 最大值：16×32767=524272，>>12=127，恰好适配 int8
     constexpr int hapticDecimFactor = rawSamplingRate / hapticOutSampleRate;  // = 16
