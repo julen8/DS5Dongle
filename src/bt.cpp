@@ -213,14 +213,16 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
         case HCI_EVENT_LINK_KEY_REQUEST: {
             bd_addr_t addr;
             hci_event_link_key_request_get_bd_addr(packet, addr);
-            link_key_t linkKey;
+            link_key_t linkKey{};
             link_key_type_t linkKeyType{};
             const bool link = gap_get_link_key_for_bd_addr(addr, linkKey, &linkKeyType);
-            LOGI("[HCI] Link key: ");
-            for (const unsigned char i : linkKey) {
-                LOGI("%02X", i);
-            }
             if (link) {
+#if ENABLE_INFO
+                LOGI("[HCI] Link key: ");
+                for (const unsigned char i : linkKey) {
+                    LOGI("%02X", i);
+                }
+#endif
                 LOGI("[HCI] Link key request from %s, reply stored key type=%u", bd_addr_to_str(addr), static_cast<unsigned int>(linkKeyType));
                 hci_send_cmd(&hci_link_key_request_reply, addr, linkKey);
             } else {
@@ -512,6 +514,15 @@ void setFeatureData(const uint8_t reportId, const uint8_t* data, const uint16_t 
     if (hidControlCid != 0) {
         // 使用固定大小的静态缓冲替代主机长度可控的栈上 VLA，避免栈溢出
         static uint8_t getFeature[MTU_CONTROL];
+        constexpr size_t featureCrcSize = 4;
+        if (len < featureCrcSize) {
+            LOGE("[L2CAP] set_feature_data len too small:%u", len);
+            return;
+        }
+        if (data == nullptr) {
+            LOGE("[L2CAP] set_feature_data data is nullptr");
+            return;
+        }
         if (static_cast<size_t>(len) + 2 > sizeof(getFeature)) {
             LOGE("[L2CAP] set_feature_data len too large:%u", len);
             return;

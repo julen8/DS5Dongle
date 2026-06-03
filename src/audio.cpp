@@ -147,7 +147,7 @@ void audioLoop() {
     }
 
     static int16_t raw[readRawFrames * inputChannels];
-    const auto bytesRead = tud_audio_read(raw + (audio.rawPos * inputChannels), sizeof(raw) - (audio.rawPos * inputChannels) * sizeof(int16_t));
+    const auto bytesRead = tud_audio_read(raw + (audio.rawPos * inputChannels), sizeof(raw) - (audio.rawPos * inputChannels * sizeof(int16_t)));
     const auto actualRawFrames = bytesRead / (inputChannels * sizeof(int16_t));
     if (bytesRead % (inputChannels * sizeof(int16_t)) != 0) {
         LOGW("bytesRead %% (inputChannels * sizeof(int16_t)):%d", bytesRead % (inputChannels * sizeof(int16_t)));
@@ -160,14 +160,14 @@ void audioLoop() {
         return;
     }
     if (audio.rawPos != readRawFrames) {
-        LOGW("actualRawFrames != readRawFrames: %d", actualRawFrames);
+        LOGW("audio.rawPos != readRawFrames: %lu", audio.rawPos);
     }
 
     audio.rawPos = 0;
     audio.needClean = true;
 
     // ── 1. 音频原始数据缓冲（送 core1 重采样 + Opus 编码）
-    for (uint32_t i = 0; i < actualRawFrames; i++) {
+    for (uint32_t i = 0; i < readRawFrames; i++) {
         if (audio.currentAudioRawElement == nullptr) {
             audio.currentAudioRawElement = getAudioRawElement();
             if (audio.currentAudioRawElement == nullptr) {
@@ -199,14 +199,15 @@ void audioLoop() {
     // 每组 16 个 int16 样本累加 → 算术右移 12 位（>>4 平均 + >>8 缩放 int16→int8）
     // 最大值：16×32767=524272，>>12=127，恰好适配 int8
     constexpr int hapticDecimFactor = rawSamplingRate / hapticOutSampleRate;  // = 16
-    const int hapticOutFrames = static_cast<int>(actualRawFrames) / hapticDecimFactor;
+    constexpr int hapticOutFrames = static_cast<int>(readRawFrames) / hapticDecimFactor;
 
     for (int i = 0; i < hapticOutFrames; i++) {
-        int32_t sumL = 0, sumR = 0;
+        int32_t sumL = 0;
+        int32_t sumR = 0;
         const int base = i * hapticDecimFactor;
         for (int j = 0; j < hapticDecimFactor; j++) {
-            sumL += raw[(base + j) * inputChannels + 2];
-            sumR += raw[(base + j) * inputChannels + 3];
+            sumL += raw[((base + j) * inputChannels) + 2];
+            sumR += raw[((base + j) * inputChannels) + 3];
         }
         // 16×max_int16=524272, >>12=127; 16×min_int16=-524288, >>12=-128 → 值域恰好 [-128,127]
         const auto outL = static_cast<int8_t>(sumL >> 12);
@@ -278,7 +279,10 @@ void core1Entry() {
             memset(inBuf + (framesToCopy * audioChannels), 0, (frames - framesToCopy) * audioChannels * sizeof(WDL_ResampleSample));
         }
 
-        audio.audioResampler.ResampleOut(resampleOutBuf, frames, audioResamplerOutputFrames, audioChannels);
+        const auto outFrames = audio.audioResampler.ResampleOut(resampleOutBuf, frames, audioResamplerOutputFrames, audioChannels);
+        if (outFrames != audioResamplerOutputFrames) {
+            LOGE("ResampleOut failed, outFrames:%d", outFrames);
+        }
         resampleOutBuf += audioResamplerOutputFrames * audioChannels;
 
         if (++count < audioResamplerOutToOpusInCount) {
@@ -293,12 +297,16 @@ void core1Entry() {
             LOGW("Opus get out buf err");
             continue;
         }
-        if (const auto ret = opus_encode_float(audio.encoder, opusInBuf, audioOpusInFrames, audioOut, subPacketAudioSize); ret < 0) {
-            LOGE("opus_encode_float failed:%d", ret);
+        const auto encodedBytes = opus_encode_float(audio.encoder, opusInBuf, audioOpusInFrames, audioOut, subPacketAudioSize);
+        if (encodedBytes < 0) {
+            LOGE("opus_encode_float failed:%d", encodedBytes);
             freeSubPacket(audioOut, subPacketType::audio);
             continue;
         }
         if (config.audioActive) {
+            if (encodedBytes < subPacketAudioSize) {
+                memset(audioOut + encodedBytes, 0, subPacketAudioSize - encodedBytes);
+            }
             writeSubPacket(audioOut, subPacketType::audio);
         } else {
             freeSubPacket(audioOut, subPacketType::audio);

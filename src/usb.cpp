@@ -48,7 +48,7 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                         // Only 1st form is supported
                         TU_VERIFY(p_request->wLength == 2);
 
-                        config.volume[index] = static_cast<float>(*reinterpret_cast<int16_t const *>(pBuff)) / 256;
+                        config.volume[index] = static_cast<float>(*reinterpret_cast<int16_t const *>(pBuff)) / 256.0F;
                         if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                             config.speakerVolume = config.volume[index];
                         }

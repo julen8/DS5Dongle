@@ -104,6 +104,7 @@ ok "CMake 配置完成"
 
 # ---- 6. 编译 ----
 info "开始编译（ninja）..."
+ninja clean
 ninja
 ok "编译完成"
 
