@@ -3,8 +3,7 @@
 #include <pico/util/queue.h>
 
 #include <atomic>
-#include <cstdint>
-#include <cstdlib>
+#include <cmath>
 #include <cstring>
 
 #include "bt.h"
@@ -147,7 +146,6 @@ static struct {
 
     uint8_t reportSeqCounter = 0;
     uint8_t packetCounter = 0;
-
 } bluetoothPacket{};
 }
 
@@ -265,8 +263,6 @@ void bluetoothPacketInit() {
     queue_init(&bluetoothPacket.subPacketHapticQueue, sizeof(uint8_t*), subPacketBuffHapticCount);
     queue_init(&bluetoothPacket.subPacketStatusQueue, sizeof(uint8_t*), subPacketBuffStatusCount);
     queue_init(&bluetoothPacket.subPacketAudioQueue, sizeof(uint8_t*), subPacketBuffAudioCount);
-
-    memcpy(bluetoothPacket.subPacketBufferStatus[0].buf, stateInitData, subPacketStatusSize);
 }
 
 uint8_t* getBufferForSubPacket(const subPacketType type) {

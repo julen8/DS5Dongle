@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
 
 #include "bluetoothPacket.h"
 #include "bt.h"
@@ -92,18 +91,6 @@ inline AudioRawElement* getAudioRawElement() {
 }
 
 inline void freeAudioRawElement(AudioRawElement* audioRawElement) { audioRawElement->inuse.store(false); }
-
-inline float getAudioGain() {
-    static float lastSpeakerVolume = config.speakerVolume;
-    static float audioGain = powf(10.0F, config.speakerVolume / 20.0F);
-
-    if (lastSpeakerVolume != config.speakerVolume) {
-        lastSpeakerVolume = config.speakerVolume;
-        audioGain = powf(10.0F, config.speakerVolume / 20.0F);
-    }
-
-    return (config.mute[0] == 0) ? audioGain : 0.0F;
-}
 
 inline void cleanRemainingData() {
     {
@@ -267,9 +254,8 @@ void core1Entry() {
         const int frames = audio.audioResampler.ResamplePrepare(audioResamplerInputFrames, audioChannels, &inBuf);
 
         const int framesToCopy = std::min(frames, audioResamplerInputFrames);
-        const float audioGain = getAudioGain();
         for (int i = 0; i < framesToCopy * audioChannels; i++) {
-            inBuf[i] = static_cast<WDL_ResampleSample>(audioRawElement->data[i]) / (INT16_MAX + 1) * audioGain;
+            inBuf[i] = static_cast<WDL_ResampleSample>(audioRawElement->data[i]) / (INT16_MAX + 1);
         }
         freeAudioRawElement(audioRawElement);
         audioRawElement = nullptr;
