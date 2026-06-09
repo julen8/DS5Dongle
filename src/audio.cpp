@@ -19,6 +19,8 @@
 #include "log.h"
 #include "utils.h"
 
+#define USE_CIC_FOR_HAPTIC 1
+
 /*
  *最终发送的 震动buf 和 音频buf 的大小分别 -> 64 , 200
  *震动是经过48000hz重采样到3000hz
@@ -79,6 +81,22 @@ static struct {
     volatile bool audioWaitData = true;
 } audio{};
 
+#if USE_CIC_FOR_HAPTIC
+// 3 阶 CIC，立体声，抽取因子 R=16，差分延迟 M=1
+struct HapticCicState {
+    // 3 级积分器（工作在高速率 48kHz）
+    int32_t i1L = 0, i2L = 0, i3L = 0;
+    int32_t i1R = 0, i2R = 0, i3R = 0;
+    // 3 级梳状延迟线（工作在低速率 3kHz）
+    int32_t c1L_z = 0, c2L_z = 0, c3L_z = 0;
+    int32_t c1R_z = 0, c2R_z = 0, c3R_z = 0;
+
+    void reset() { *this = HapticCicState{}; }
+};
+
+static HapticCicState hapticCic;
+#endif
+
 inline AudioRawElement* getAudioRawElement() {
     for (auto& elem : audio.audioRawElementArray) {
         // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
@@ -111,6 +129,9 @@ inline void cleanRemainingData() {
         audio.rawPos = 0;
         audio.hapticBufPos = 0;
         audio.hapticBuf = nullptr;
+#if USE_CIC_FOR_HAPTIC
+        hapticCic.reset();
+#endif
         audio.audioBufPos = 0;
         audio.currentAudioRawElement = nullptr;
     }
@@ -182,13 +203,66 @@ void audioLoop() {
     }
 
     // ── 2. 震动：48kHz→3kHz（16:1）
-    // 整数 box-filter 抽取 48kHz→3kHz（16:1）
-    // 每组 16 个 int16 样本累加 → 算术右移 12 位（>>4 平均 + >>8 缩放 int16→int8）
-    // 最大值：16×32767=524272，>>12=127，恰好适配 int8
     constexpr int hapticDecimFactor = rawSamplingRate / hapticOutSampleRate;  // = 16
     constexpr int hapticOutFrames = static_cast<int>(readRawFrames) / hapticDecimFactor;
 
     for (int i = 0; i < hapticOutFrames; i++) {
+#if USE_CIC_FOR_HAPTIC
+        // 3 阶 CIC 抽取
+        //  CIC 总增益 = R^N = 16^3 = 4096，对应 >>12
+        //  int16 → int8 再 >>8，合计右移 20 位
+        //  输出范围理论上 [-128, +128]，故需饱和到 int8
+        const int base = i * hapticDecimFactor;
+
+        // ── 高速率：16 次积分（纯加法，L/R 并行做提高 cache 命中率）──
+        for (int j = 0; j < hapticDecimFactor; j++) {
+            const int idx = (base + j) * inputChannels;
+            const int32_t xL = raw[idx + 2];
+            const int32_t xR = raw[idx + 3];
+
+            hapticCic.i1L += xL;
+            hapticCic.i2L += hapticCic.i1L;
+            hapticCic.i3L += hapticCic.i2L;
+            hapticCic.i1R += xR;
+            hapticCic.i2R += hapticCic.i1R;
+            hapticCic.i3R += hapticCic.i2R;
+        }
+
+        // ── 低速率：3 级梳状（纯减法）──
+        const int32_t c1L = hapticCic.i3L - hapticCic.c1L_z;
+        hapticCic.c1L_z = hapticCic.i3L;
+        const int32_t c2L = c1L - hapticCic.c2L_z;
+        hapticCic.c2L_z = c1L;
+        const int32_t c3L = c2L - hapticCic.c3L_z;
+        hapticCic.c3L_z = c2L;
+
+        const int32_t c1R = hapticCic.i3R - hapticCic.c1R_z;
+        hapticCic.c1R_z = hapticCic.i3R;
+        const int32_t c2R = c1R - hapticCic.c2R_z;
+        hapticCic.c2R_z = c1R;
+        const int32_t c3R = c2R - hapticCic.c3R_z;
+        hapticCic.c3R_z = c2R;
+
+        // ── 增益补偿 + 位深转换 + 饱和 ──
+        int32_t yL = c3L >> 20;
+        int32_t yR = c3R >> 20;
+        if (yL > 127) {
+            yL = 127;
+        } else if (yL < -128) {
+            yL = -128;
+        }
+        if (yR > 127) {
+            yR = 127;
+        } else if (yR < -128) {
+            yR = -128;
+        }
+
+        const auto outL = static_cast<int8_t>(yL);
+        const auto outR = static_cast<int8_t>(yR);
+#else
+        // 整数 box-filter 抽取 48kHz→3kHz（16:1）
+        // 每组 16 个 int16 样本累加 → 算术右移 12 位（>>4 平均 + >>8 缩放 int16→int8）
+        // 最大值：16×32767=524272，>>12=127，恰好适配 int8
         int32_t sumL = 0;
         int32_t sumR = 0;
         const int base = i * hapticDecimFactor;
@@ -199,6 +273,7 @@ void audioLoop() {
         // 16×max_int16=524272, >>12=127; 16×min_int16=-524288, >>12=-128 → 值域恰好 [-128,127]
         const auto outL = static_cast<int8_t>(sumL >> 12);
         const auto outR = static_cast<int8_t>(sumR >> 12);
+#endif
 
         if (audio.hapticBuf == nullptr) {
             audio.hapticBuf = reinterpret_cast<int8_t*>(getBufferForSubPacket(subPacketType::haptic));
