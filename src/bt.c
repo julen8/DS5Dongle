@@ -9,13 +9,14 @@
 #include <classic/sdp_server.h>
 #include <l2cap.h>
 #include <pico/cyw43_arch.h>
-
-#include <algorithm>
-#include <cstdio>
-#include <cstring>
+#include <pico/platform/compiler.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "bluetoothPacket.h"
 #include "config.h"
+#include "crc32.h"
 #include "log.h"
 #include "utils.h"
 
@@ -41,34 +42,35 @@ static bool theRequestHasBeenSent = false;
 constexpr uint8_t featureSlotCount = 16;
 constexpr uint8_t featureDataMax = 64;
 struct FeatureSlot {
-    bool valid = false;
-    uint8_t len = 0;                    // 实际存储字节数（包含 data[0] = reportId）
-    uint8_t data[featureDataMax] = {};  // data[0]=reportId, data[1..len-1]=payload
+    bool valid;
+    uint8_t len;                   // 实际存储字节数（包含 data[0] = reportId）
+    uint8_t data[featureDataMax];  // data[0]=reportId, data[1..len-1]=payload
 };
-static FeatureSlot featureData[featureSlotCount];
+static struct FeatureSlot featureData[featureSlotCount] = {};
 
 // 找到对应 reportId 的槽位，未找到返回 nullptr
-static FeatureSlot* findFeatureSlot(const uint8_t reportId) {
-    for (auto& s : featureData) {
-        if (s.valid && s.data[0] == reportId) {
-            return &s;
+static struct FeatureSlot* findFeatureSlot(const uint8_t reportId) {
+    for (int i = 0; i < featureSlotCount; ++i) {
+        if (featureData[i].valid && featureData[i].data[0] == reportId) {
+            return &featureData[i];
         }
     }
     return nullptr;
 }
 
 // 找到或分配一个槽位（同 reportId 复用）
-static FeatureSlot* allocFeatureSlot(const uint8_t reportId) {
+static struct FeatureSlot* allocFeatureSlot(const uint8_t reportId) {
     // 同 reportId 复用
-    for (auto& s : featureData) {
-        if (s.valid && s.data[0] == reportId) {
-            return &s;
+    for (int i = 0; i < featureSlotCount; ++i) {
+        if (featureData[i].valid && featureData[i].data[0] == reportId) {
+            return &featureData[i];
         }
     }
+
     // 空槽
-    for (auto& s : featureData) {
-        if (!s.valid) {
-            return &s;
+    for (int i = 0; i < featureSlotCount; ++i) {
+        if (!featureData[i].valid) {
+            return &featureData[i];
         }
     }
     return nullptr;  // 槽位已满
@@ -78,7 +80,7 @@ absolute_time_t inactiveTime = 0;  // 手柄长时间静默
 
 void btRegisterDataCallback(const bt_data_callback_t callback) { btDataCallback = callback; }
 
-inline bool btDisconnect() {
+static inline bool btDisconnect() {
     if (aclHandle == HCI_CON_HANDLE_INVALID) {
         return false;
     }
@@ -88,7 +90,7 @@ inline bool btDisconnect() {
     return true;
 }
 
-inline void btL2capInit() {
+static inline void btL2capInit() {
     l2capEventCallbackRegistration.callback = &l2capPacketHandler;
     l2cap_add_event_handler(&l2capEventCallbackRegistration);
     // 修复重连后自动断开的关键点
@@ -100,6 +102,11 @@ inline void btL2capInit() {
 }
 
 int btInit() {
+    for (int i = 0; i < featureSlotCount; i++) {
+        featureData[i].valid = false;
+        featureData[i].len = 0;
+    }
+
     btL2capInit();
 
     // SSP (Secure Simple Pairing)
@@ -119,7 +126,8 @@ int btInit() {
 }
 
 static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* packet, uint16_t size) {
-    switch (const uint8_t eventType = hci_event_packet_get_type(packet)) {
+    const uint8_t eventType = hci_event_packet_get_type(packet);
+    switch (eventType) {
         case BTSTACK_EVENT_STATE: {
             const uint8_t state = btstack_event_state_get_state(packet);
             LOGI("[BT] State: %u", state);
@@ -148,7 +156,7 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
 
             // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
             if ((cod & 0x000F00) == 0x000500) {
-                LOGI("[HCI] Gamepad found: %s (CoD: 0x%06x)", bd_addr_to_str(addr), static_cast<unsigned int>(cod));
+                LOGI("[HCI] Gamepad found: %s (CoD: 0x%06x)", bd_addr_to_str(addr), (unsigned int)cod);
                 bd_addr_copy(currentDeviceAddr, addr);
                 deviceFound = true;
                 gap_inquiry_stop();
@@ -187,14 +195,15 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
         }
 
         case HCI_EVENT_COMMAND_COMPLETE: {
-            const uint8_t status = hci_event_command_complete_get_return_parameters(packet)[0];
-            const uint16_t opcode = hci_event_command_complete_get_command_opcode(packet);
+            [[maybe_unused]] const uint8_t status = hci_event_command_complete_get_return_parameters(packet)[0];
+            [[maybe_unused]] const uint16_t opcode = hci_event_command_complete_get_command_opcode(packet);
             LOGI("[HCI] CmdComplete (0x%04X) status=0x%02X", opcode, status);
             break;
         }
 
         case HCI_EVENT_CONNECTION_COMPLETE: {
-            if (const uint8_t status = hci_event_connection_complete_get_status(packet); status == 0) {
+            const uint8_t status = hci_event_connection_complete_get_status(packet);
+            if (status == 0) {
                 const hci_con_handle_t handle = hci_event_connection_complete_get_connection_handle(packet);
                 aclHandle = handle;
                 hci_event_connection_complete_get_bd_addr(packet, currentDeviceAddr);
@@ -213,17 +222,14 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
         case HCI_EVENT_LINK_KEY_REQUEST: {
             bd_addr_t addr;
             hci_event_link_key_request_get_bd_addr(packet, addr);
-            link_key_t linkKey{};
-            link_key_type_t linkKeyType{};
+            link_key_t linkKey = {};
+            link_key_type_t linkKeyType = {};
             const bool link = gap_get_link_key_for_bd_addr(addr, linkKey, &linkKeyType);
             if (link) {
-#if ENABLE_INFO
-                LOGI("[HCI] Link key: ");
-                for (const unsigned char i : linkKey) {
-                    LOGI("%02X", i);
-                }
-#endif
-                LOGI("[HCI] Link key request from %s, reply stored key type=%u", bd_addr_to_str(addr), static_cast<unsigned int>(linkKeyType));
+                LOGD("[HCI] Link key: ");
+                printHex(linkKey, sizeof(linkKey));
+
+                LOGI("[HCI] Link key request from %s, reply stored key type=%u", bd_addr_to_str(addr), (unsigned int)linkKeyType);
                 hci_send_cmd(&hci_link_key_request_reply, addr, linkKey);
             } else {
                 LOGI("[HCI] Link key request from %s, no key, force re-pair", bd_addr_to_str(addr));
@@ -264,7 +270,7 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
 
         case HCI_EVENT_ENCRYPTION_CHANGE: {
             const uint8_t status = hci_event_encryption_change_get_status(packet);
-            const hci_con_handle_t handle = hci_event_encryption_change_get_connection_handle(packet);
+            [[maybe_unused]] const hci_con_handle_t handle = hci_event_encryption_change_get_connection_handle(packet);
             const uint8_t enabled = hci_event_encryption_change_get_encryption_enabled(packet);
             LOGI("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u", handle, status, enabled);
             if (status == ERROR_CODE_SUCCESS && (enabled != 0U)) {
@@ -284,7 +290,7 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
             bd_addr_t addr;
             hci_event_connection_request_get_bd_addr(packet, addr);
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
-            LOGI("[HCI] Incoming ACL request from %s cod=0x%06x", bd_addr_to_str(addr), static_cast<unsigned int>(cod));
+            LOGI("[HCI] Incoming ACL request from %s cod=0x%06x", bd_addr_to_str(addr), (unsigned int)cod);
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(currentDeviceAddr, addr);
                 gap_inquiry_stop();
@@ -297,14 +303,14 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
             tud_disconnect();
             gap_connectable_control(1);
             gap_discoverable_control(1);
-            const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
+            [[maybe_unused]] const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
             deviceFound = false;
             newPair = false;
             aclHandle = HCI_CON_HANDLE_INVALID;
             hidControlCid = 0;
             hidInterruptCid = 0;
-            for (auto& s : featureData) {
-                s.valid = false;
+            for (int i = 0; i < featureSlotCount; ++i) {
+                featureData[i].valid = false;
             }  // 清空静态缓存
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
             LOGI("[HCI] Disconnected reason=0x%02X, start inquiry", reason);
@@ -328,7 +334,7 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
                 if (packet[3] < 120 || packet[3] > 140 || packet[4] < 120 || packet[4] > 140 || packet[5] < 120 || packet[5] > 140 || packet[6] < 120 || packet[6] > 140 || packet[7] > 0 ||
                     packet[8] > 0 || packet[10] != 0x08 || packet[11] != 0x00 || packet[12] != 0x00) {
                     inactiveTime = get_absolute_time();
-                } else if (absolute_time_diff_us(inactiveTime, get_absolute_time()) > static_cast<int64_t>(config.inactiveTime) * 60 * 1000 * 1000) {
+                } else if (absolute_time_diff_us(inactiveTime, get_absolute_time()) > (int64_t)(config.inactiveTime) * 60 * 1000 * 1000) {
                     LOGI("disconnect when inactive");
                     inactiveTime = get_absolute_time();
                     btDisconnect();
@@ -357,9 +363,9 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
             // 存储 Feature Report：packet[1] 是 reportId，需要 size >= 2
             if (size >= 2 && packet[0] == 0xA3) {
                 const uint8_t reportId = packet[1];
-                // 存 packet[1..size-1]（含 reportId），截断到 FEATURE_DATA_MAX
-                const uint8_t storeLen = static_cast<uint8_t>(std::min<uint16_t>(static_cast<uint16_t>(size - 1), featureDataMax));
-                auto* slot = allocFeatureSlot(reportId);
+                // 存 packet[1..size-1]（含 reportId），截断到 featureDataMax
+                const uint8_t storeLen = (uint8_t)MIN((size - 1), (uint16_t)featureDataMax);
+                struct FeatureSlot* slot = allocFeatureSlot(reportId);
                 if (slot != nullptr) {
                     memcpy(slot->data, packet + 1, storeLen);
                     slot->len = storeLen;
@@ -382,16 +388,18 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
         return;
     }
 
-    switch ([[maybe_unused]] const uint8_t eventType = hci_event_packet_get_type(packet)) {
+    const uint8_t eventType = hci_event_packet_get_type(packet);
+    switch (eventType) {
         case L2CAP_EVENT_CHANNEL_OPENED: {
             const uint8_t status = l2cap_event_channel_opened_get_status(packet);
             const uint16_t localCid = l2cap_event_channel_opened_get_local_cid(packet);
             if (status == 0) {
-                if (const uint16_t psm = l2cap_event_channel_opened_get_psm(packet); psm == PSM_HID_CONTROL) {
+                const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
+                if (psm == PSM_HID_CONTROL) {
                     LOGI("[L2CAP] HID Control opened cid=0x%04X", localCid);
                     hidControlCid = localCid;
 
-                    const auto mtu = l2cap_get_remote_mtu_for_local_cid(hidControlCid);
+                    [[maybe_unused]] const uint16_t mtu = l2cap_get_remote_mtu_for_local_cid(hidControlCid);
                     LOGI("[L2CAP] Remote Control MTU: %d", mtu);
                 } else if (psm == PSM_HID_INTERRUPT) {
                     LOGI("[L2CAP] HID Interrupt opened cid=0x%04X", localCid);
@@ -402,14 +410,15 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
                     LOGI("Init DualSense");
                     initFeature();
                     // 初始化手柄状态
-                    if (auto* statusBuffer = getBufferForSubPacket(subPacketType::status); statusBuffer != nullptr) {
+                    uint8_t* statusBuffer = getBufferForSubPacket(subPacketTypeStatus);
+                    if (statusBuffer != nullptr) {
                         memcpy(statusBuffer, stateInitData, subPacketStatusSize);
-                        writeSubPacket(statusBuffer, subPacketType::status);
+                        writeSubPacket(statusBuffer, subPacketTypeStatus);
                     } else {
-                        LOGE("getBufferForSubPacket subPacketType::status");
+                        LOGE("getBufferForSubPacket subPacketTypeStatus");
                     }
 
-                    const auto mtu = l2cap_get_remote_mtu_for_local_cid(hidInterruptCid);
+                    [[maybe_unused]] const uint16_t mtu = l2cap_get_remote_mtu_for_local_cid(hidInterruptCid);
                     LOGI("[L2CAP] Remote Interrupt MTU: %d", mtu);
 
                     gap_connectable_control(0U);
@@ -424,7 +433,7 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
                     l2cap_request_can_send_now_event(hid_control_cid);
                 }*/
             } else {
-                const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
+                [[maybe_unused]] const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
                 hidControlCid = 0;
                 hidInterruptCid = 0;
                 deviceFound = false;
@@ -436,14 +445,15 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
 
         case L2CAP_EVENT_INCOMING_CONNECTION: {
             const uint16_t localCid = l2cap_event_incoming_connection_get_local_cid(packet);
-            const uint16_t psm = l2cap_event_incoming_connection_get_psm(packet);
+            [[maybe_unused]] const uint16_t psm = l2cap_event_incoming_connection_get_psm(packet);
             LOGI("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X", psm, localCid);
             l2cap_accept_connection(localCid);
             break;
         }
 
         case L2CAP_EVENT_CHANNEL_CLOSED: {
-            if (const uint16_t localCid = l2cap_event_channel_closed_get_local_cid(packet); localCid == hidControlCid) {
+            const uint16_t localCid = l2cap_event_channel_closed_get_local_cid(packet);
+            if (localCid == hidControlCid) {
                 hidControlCid = 0;
                 LOGI("[L2CAP] HID Control closed cid=0x%04X", localCid);
             } else if (localCid == hidInterruptCid) {
@@ -462,8 +472,10 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
             {
                 theRequestHasBeenSent = false;
                 size_t len = 0;
-                if (auto* bluetoothRawPacket = getBluetoothRawPacket(&len); bluetoothRawPacket != nullptr) {
-                    if (const auto status = l2cap_send(hidInterruptCid, bluetoothRawPacket, len); status != 0) {
+                uint8_t* bluetoothRawPacket = getBluetoothRawPacket(&len);
+                if (bluetoothRawPacket != nullptr) {
+                    const uint8_t status = l2cap_send(hidInterruptCid, bluetoothRawPacket, len);
+                    if (status != 0) {
                         LOGE("[L2CAP] L2CAP Send Error, Status: 0x%02X", status);
                     }
                     freeBluetoothRawPacket(bluetoothRawPacket);
@@ -488,11 +500,11 @@ void btRequestSend() {
 uint16_t getFeatureData(const uint8_t reportId, uint8_t* outBuf, const uint16_t maxLen) {
     // 若为0x81则会请求新内容，其他若有旧数据则不进行请求
     uint16_t copied = 0;
-    const auto* slot = findFeatureSlot(reportId);
+    const struct FeatureSlot* slot = findFeatureSlot(reportId);
     const bool hasData = (slot != nullptr);
     if (hasData && outBuf != nullptr && slot->len > 1) {
         // slot->data[0] = reportId，跳过，直接把 payload 写入调用方 buffer
-        copied = static_cast<uint16_t>(std::min<uint16_t>(maxLen, slot->len - 1));
+        copied = (uint16_t)MIN((uint16_t)(slot->len - 1), maxLen);
         memcpy(outBuf, slot->data + 1, copied);
     }
 
@@ -523,14 +535,14 @@ void setFeatureData(const uint8_t reportId, const uint8_t* data, const uint16_t 
             LOGE("[L2CAP] set_feature_data data is nullptr");
             return;
         }
-        if (static_cast<size_t>(len) + 2 > sizeof(getFeature)) {
+        if ((size_t)len + 2 > sizeof(getFeature)) {
             LOGE("[L2CAP] set_feature_data len too large:%u", len);
             return;
         }
         getFeature[0] = 0x53;
         getFeature[1] = reportId;
         memcpy(getFeature + 2, data, len);
-        fill_feature_report_checksum(getFeature + 1, len + 1);
+        fillFeatureReportChecksum(getFeature + 1, len + 1);
         l2cap_send(hidControlCid, getFeature, len + 2);
 
         LOGD("[L2CAP] Requesting Set Feature Report 0x%02X", reportId);

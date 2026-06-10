@@ -1,16 +1,16 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 
 constexpr auto subPacketStatusSize = 63;
 constexpr auto subPacketHapticSize = 64;
 constexpr auto subPacketAudioSize = 200;
 
-enum class subPacketType : std::uint8_t {
-    status = 1,
-    haptic,
-    audio,
+enum subPacketType : uint8_t {
+    subPacketTypeStatus = 1,
+    subPacketTypeHaptic,
+    subPacketTypeAudio,
 };
 
 static constexpr uint8_t stateInitData[subPacketStatusSize] = {
@@ -21,9 +21,9 @@ static constexpr uint8_t stateInitData[subPacketStatusSize] = {
 
 void bluetoothPacketInit();
 
-uint8_t* getBufferForSubPacket(subPacketType type);
-void writeSubPacket(uint8_t* buff, subPacketType type);
-void freeSubPacket(uint8_t* buffer, subPacketType type);
+uint8_t* getBufferForSubPacket(enum subPacketType type);
+void writeSubPacket(uint8_t* buff, enum subPacketType type);
+void freeSubPacket(uint8_t* buffer, enum subPacketType type);
 
 uint8_t* getBluetoothRawPacket(size_t* size);
 void freeBluetoothRawPacket(uint8_t* bluetoothRawPacket);

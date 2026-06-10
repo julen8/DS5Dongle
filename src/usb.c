@@ -55,7 +55,8 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                     case AUDIO10_CS_REQ_SET_CUR:
                         // Only 1st form is supported
                         TU_VERIFY(p_request->wLength == 2);
-                        if (auto newVolume = *reinterpret_cast<int16_t const *>(pBuff); *volume != newVolume) {  // volume: [-25600, 0]
+                        int16_t newVolume = *((int16_t const *)pBuff);
+                        if (*volume != newVolume) {  // volume: [-25600, 0]
                             *volume = newVolume;
                         }
                         TU_LOG2("    Set Volume: %d dB of entity: %u\r\n", config.volume[index], entityID);

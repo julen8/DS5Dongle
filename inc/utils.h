@@ -3,62 +3,7 @@
 //
 
 #include <hci_cmd.h>
-
-#include <array>
-#include <cstdint>
-#include <cstdio>
-
-inline constexpr uint32_t crc32_table_entry(uint32_t index) {
-    for (unsigned bit = 0; bit < 8; ++bit) {
-        index = (index >> 1) ^ (0xEDB88320 & -(index & 1));
-    }
-    return index;
-}
-
-inline constexpr auto make_crc32_table() {
-    std::array<uint32_t, 256> table{};
-    for (uint32_t i = 0; i < table.size(); ++i) {
-        table[i] = crc32_table_entry(i);
-    }
-    return table;
-}
-
-inline constexpr auto crc32_lookup_table = make_crc32_table();
-
-inline uint32_t crc32_seeded(const uint8_t *data, size_t size, const uint32_t seed) {
-    uint32_t crc = ~seed;
-
-    while (size--) {
-        crc = (crc >> 8) ^ crc32_lookup_table[(crc ^ *data++) & 0xff];
-    }
-
-    return ~crc;
-}
-
-inline uint32_t crc32(const uint8_t *data, size_t size) {
-    return crc32_seeded(data, size, 0xEADA2D49);  // 0xA2 seed
-}
-
-inline void fill_output_report_checksum(uint8_t *outputData, size_t len) {
-    uint32_t crc = crc32(outputData, len - 4);
-    outputData[len - 4] = (crc >> 0) & 0xFF;
-    outputData[len - 3] = (crc >> 8) & 0xFF;
-    outputData[len - 2] = (crc >> 16) & 0xFF;
-    outputData[len - 1] = (crc >> 24) & 0xFF;
-}
-
-inline uint32_t crc32_feature(const uint8_t *data, std::size_t size) {
-    // https://github.com/rafaelvaloto/Dualsense-Multiplatform/blob/main/Source/Private/GCore/Utils/CR32.cpp
-    return crc32_seeded(data, size, 0x2060efc3);  // 0x53 seed
-}
-
-inline void fill_feature_report_checksum(uint8_t *data, const size_t len) {
-    uint32_t crc = crc32_feature(data, len - 4);
-    data[len - 4] = (crc >> 0) & 0xFF;
-    data[len - 3] = (crc >> 8) & 0xFF;
-    data[len - 2] = (crc >> 16) & 0xFF;
-    data[len - 1] = (crc >> 24) & 0xFF;
-}
+#include <stdint.h>
 
 enum PowerState : uint8_t {
     Discharging = 0x00,          // Use PowerPercent
@@ -69,7 +14,7 @@ enum PowerState : uint8_t {
     ChargingError = 0x0F         // PowerPercent not valid?
 };
 
-enum Direction : uint8_t { North = 0, NorthEast, East, SouthEast, South, SouthWest, West, NorthWest, None = 8 };
+enum Direction : uint8_t { North = 0, NorthEast = 1, East = 2, SouthEast = 3, South = 4, SouthWest = 5, West = 6, NorthWest = 7, None = 8 };
 
 struct __attribute__((packed)) TouchFingerData {  // 4
     /*0.0*/ uint32_t Index : 7;
@@ -79,7 +24,7 @@ struct __attribute__((packed)) TouchFingerData {  // 4
 };
 
 struct __attribute__((packed)) TouchData {  // 9
-    /*0*/ TouchFingerData Finger[2];
+    /*0*/ struct TouchFingerData Finger[2];
     /*8*/ uint8_t Timestamp;
 };
 
@@ -91,7 +36,7 @@ struct __attribute__((packed)) USBGetStateData {  // 63
     /* 4  */ uint8_t TriggerLeft;
     /* 5  */ uint8_t TriggerRight;
     /* 6  */ uint8_t SeqNo;  // always 0x01 on BT
-    /* 7.0*/ Direction DPad : 4;
+    /* 7.0*/ enum Direction DPad : 4;
     /* 7.4*/ uint8_t ButtonSquare : 1;
     /* 7.5*/ uint8_t ButtonCross : 1;
     /* 7.6*/ uint8_t ButtonCircle : 1;
@@ -122,7 +67,7 @@ struct __attribute__((packed)) USBGetStateData {  // 63
     /*25  */ int16_t AccelerometerZ;
     /*27  */ uint32_t SensorTimestamp;
     /*31  */ int8_t Temperature;  // reserved2 in Linux driver
-    /*32  */ TouchData Touch;
+    /*32  */ struct TouchData Touch;
     /*41.0*/ uint8_t TriggerRightStopLocation : 4;  // trigger stop can be a range from 0 to 9 (F/9.0 for Apple interface)
     /*41.4*/ uint8_t TriggerRightStatus : 4;
     /*42.0*/ uint8_t TriggerLeftStopLocation : 4;
@@ -141,7 +86,7 @@ struct __attribute__((packed)) USBGetStateData {  // 63
                                               // 3 for vibration
     /*48  */ uint32_t DeviceTimeStamp;
     /*52.0*/ uint8_t PowerPercent : 4;  // 0x00-0x0A
-    /*52.4*/ PowerState Power : 4;
+    /*52.4*/ enum PowerState Power : 4;
     /*53.0*/ uint8_t PluggedHeadphones : 1;
     /*53.1*/ uint8_t PluggedMic : 1;
     /*53.2*/ uint8_t MicMuted : 1;  // Mic muted by powersave/mute command

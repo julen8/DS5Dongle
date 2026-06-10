@@ -1,8 +1,9 @@
 # Generated Cmake Pico project file
 
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.26)
 
-set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -44,13 +45,14 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(ds5-bridge
-        src/usb_descriptors.cpp
-        src/main.cpp
-        src/usb.cpp
-        src/audio.cpp
-        src/bt.cpp
-        src/config.cpp
-        src/bluetoothPacket.cpp
+        src/usb_descriptors.c
+        src/main.c
+        src/usb.c
+        src/audio.c
+        src/bt.c
+        src/config.c
+        src/bluetoothPacket.c
+        src/crc32.c
 )
 
 target_include_directories(ds5-bridge PRIVATE
@@ -60,9 +62,11 @@ target_include_directories(ds5-bridge PRIVATE
 # Cockos WDLResampler
 add_library(wdl_resampler STATIC
         lib/WDL/WDL/resample.cpp
+        src/wdlResample.cpp
 )
 target_include_directories(wdl_resampler PUBLIC
         lib/WDL/WDL
+        ${CMAKE_CURRENT_LIST_DIR}/inc
 )
 
 # Opus
@@ -95,9 +99,6 @@ pico_enable_stdio_usb(ds5-bridge 0)
 #        ${CMAKE_CURRENT_LIST_DIR}
 #)
 
-target_include_directories(${PROJECT_NAME} PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
 
 target_link_libraries(ds5-bridge
         pico_stdlib

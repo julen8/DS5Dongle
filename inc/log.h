@@ -1,6 +1,7 @@
 #pragma once
 
-#include <cstdio>
+#include <stdint.h>
+#include <stdio.h>
 
 #define ENABLE_DEBUG 0
 #define ENABLE_INFO 0
@@ -32,7 +33,7 @@
 #if ENABLE_DEBUG
 inline void printHex(const uint8_t *data, size_t size) {
     for (size_t i = 0; i < size; i++) {
-        printf("%02x ", static_cast<unsigned>(data[i]));
+        printf("%02x ", data[i]);
     }
     printf("\n");
 }

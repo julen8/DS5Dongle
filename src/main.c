@@ -8,17 +8,18 @@
 #include <hardware/watchdog.h>
 #include <pico/critical_section.h>
 #include <pico/cyw43_arch.h>
-
-#include <cstdio>
+#include <stdint.h>
+#include <stdio.h>
 
 #include "audio.h"
 #include "bluetoothPacket.h"
 #include "bt.h"
 #include "config.h"
+#include "crc32.h"
 #include "log.h"
 #include "utils.h"
 
-constexpr auto bluetoothInterruptDataSize = 63;
+constexpr int bluetoothInterruptDataSize = 63;
 static uint8_t interruptInData[] = {0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff,
                                     0x03, 0x03, 0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00, 0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x09,
                                     0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00, 0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b};
@@ -66,7 +67,7 @@ void interruptLoop() {
     }
 }
 
-void onBtData(const CHANNEL_TYPE channel, const uint8_t *data, const uint16_t len) {
+void onBtData(const enum CHANNEL_TYPE channel, const uint8_t *data, const uint16_t len) {
     // LOGD("[Main] BT data callback: channel=%u len=%u", channel, len);
     // 先做长度/边界校验，避免短包导致越界读
     if (channel == INTERRUPT && len >= 2 && data[1] == 0x31) {
@@ -128,15 +129,16 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         }
         switch (buffer[0]) {
             case 0x02: {
-                if (auto *statusBuffer = getBufferForSubPacket(subPacketType::status); statusBuffer != nullptr) {
-                    const auto size = std::min(bufsize - 1, subPacketStatusSize);
+                uint8_t *statusBuffer = getBufferForSubPacket(subPacketTypeStatus);
+                if (statusBuffer != nullptr) {
+                    const int size = ((bufsize - 1) < subPacketStatusSize) ? (bufsize - 1) : subPacketStatusSize;
                     memcpy(statusBuffer, buffer + 1, size);
                     if (size < subPacketStatusSize) {
                         memset(statusBuffer + size, 0, subPacketStatusSize - size);
                     }
-                    writeSubPacket(statusBuffer, subPacketType::status);
+                    writeSubPacket(statusBuffer, subPacketTypeStatus);
                 } else {
-                    LOGE("getBufferForSubPacket subPacketType::status");
+                    LOGE("getBufferForSubPacket subPacketTypeStatus");
                 }
                 break;
             }
@@ -160,13 +162,15 @@ int main() {
 
     board_init();
     printf("\n\n===================\nBuild Time: " __DATE__ " " __TIME__ "\n===================\n\n");
+    initCrc32();
 
     constexpr tusb_rhport_init_t devInit = {.role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_FULL};
     tusb_init(BOARD_TUD_RHPORT, &devInit);
     tud_disconnect();
     board_init_after_tusb();
 
-    if (const auto ret = cyw43_arch_init(); ret != 0) {
+    const int ret = cyw43_arch_init();
+    if (ret != 0) {
         LOGE("Failed to initialize CYW43:%d", ret);
         return 1;
     }

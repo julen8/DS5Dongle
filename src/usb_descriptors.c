@@ -82,7 +82,7 @@ tusb_desc_device_t desc_device = {.bLength = sizeof(tusb_desc_device_t),
 // Application return pointer to descriptor
 uint8_t const *tud_descriptor_device_cb(void) {
     desc_device.idProduct = ds_mode() ? 0x0CE6 : 0x0DF2;
-    return reinterpret_cast<uint8_t const *>(&desc_device);
+    return (uint8_t const *)(&desc_device);
 }
 
 //--------------------------------------------------------------------+
@@ -144,10 +144,7 @@ uint8_t descriptor_configuration[] = {
     0x01,  // bSourceID: 1
     0x01,  // bControlSize: 1 byte per control
     0x03,  // bmaControls[0]: Master – Mute, Volume
-    0x00,
-    0x00,
-    0x00,
-    0x00,
+    0x00, 0x00, 0x00, 0x00,
     0x00,  // bmaControls[1..4]: No per-channel controls
 
     // Output Terminal Descriptor (Terminal ID 3: Speaker ← from Unit 2)
@@ -237,8 +234,7 @@ uint8_t descriptor_configuration[] = {
     0x02,  // bSubframeSize: 2 bytes/sample
     0x10,  // bBitResolution: 16 bits
     0x01,  // bSamFreqType: 1 discrete frequency
-    0x80,
-    0xBB,
+    0x80, 0xBB,
     0x00,  // tSamFreq: 48000 Hz (0x00BB80)
 
     // Endpoint Descriptor (Audio OUT: EP1)
@@ -301,8 +297,7 @@ uint8_t descriptor_configuration[] = {
     0x02,  // bSubframeSize: 2
     0x10,  // bBitResolution: 16
     0x01,  // bSamFreqType: 1
-    0x80,
-    0xBB,
+    0x80, 0xBB,
     0x00,  // tSamFreq: 48000 Hz
 
     // Endpoint Descriptor (Audio IN: EP2)
@@ -372,7 +367,7 @@ uint8_t descriptor_configuration[] = {
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void)index;  // for multiple configurations
-    auto bInterval = 0x01;
+    int bInterval = 0x01;
     switch (config.pollingRateMode) {
         case 0:
             bInterval = 0x04;
@@ -384,7 +379,7 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
             bInterval = 0x01;
             break;
     }
-    constexpr auto offset = CONFIG_DESC_LEN_BASE;
+    constexpr int offset = CONFIG_DESC_LEN_BASE;
     descriptor_configuration[offset - 1] = bInterval;
     descriptor_configuration[offset - 8] = bInterval;
     if (ds_mode()) {
