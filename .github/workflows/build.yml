@@ -1,133 +1,100 @@
-name: Build firmware
+name: Build ds5-bridge.uf2
 
 on:
   push:
-    branches:
-      - "**"
+    branches: [ "**" ]
+  pull_request:
   workflow_dispatch:
-
-env:
-  PICO_SDK_REF: 2.2.0
-  TINYUSB_REF: 0.20.0
-  PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
-  APT_PACKAGES: >-
-    cmake
-    python3
-    build-essential
-    gcc-arm-none-eabi
-    libnewlib-arm-none-eabi
-    libstdc++-arm-none-eabi-newlib
-    ninja-build
 
 jobs:
   build:
-    name: Build UF2 artifacts
     runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+
+    env:
+      PICO_SDK_VERSION: "2.2.0"
+      TINYUSB_VERSION: "0.20.0"
 
     steps:
+      # ---- 0. 安装编译依赖 ----
+      - name: Install build dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            git \
+            cmake \
+            ninja-build \
+            python3 \
+            gcc \
+            g++ \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib \
+            binutils-arm-none-eabi \
+            ca-certificates
+
+      # ---- 1. 检出源码（含子模块） ----
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 1
 
-      - name: Prepare build dependency cache
-        id: apt-cache
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # ---- 2. 克隆 Pico SDK ----
+      - name: Clone Pico SDK
         run: |
-          mkdir -p "$RUNNER_TEMP/apt-cache/partial"
-          . /etc/os-release
-          package_hash="$(printf '%s' "$APT_PACKAGES" | sha256sum | cut -d ' ' -f 1)"
-          echo "dir=$RUNNER_TEMP/apt-cache" >> "$GITHUB_OUTPUT"
-          echo "os=${ID}-${VERSION_ID}" >> "$GITHUB_OUTPUT"
-          echo "package-hash=$package_hash" >> "$GITHUB_OUTPUT"
-
-      - name: Cache build dependencies
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.apt-cache.outputs.dir }}
-          key: ${{ runner.os }}-${{ runner.arch }}-apt-${{ steps.apt-cache.outputs.os }}-${{ steps.apt-cache.outputs.package-hash }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-apt-${{ steps.apt-cache.outputs.os }}-
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get -o Dir::Cache::archives="${{ steps.apt-cache.outputs.dir }}" install --download-only -y $APT_PACKAGES
-          sudo apt-get -o Dir::Cache::archives="${{ steps.apt-cache.outputs.dir }}" install -y $APT_PACKAGES
-          sudo chmod -R a+rX "${{ steps.apt-cache.outputs.dir }}"
-
-      - name: Cache Pico SDK
-        id: cache-pico-sdk
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.PICO_SDK_PATH }}
-          key: ${{ runner.os }}-${{ runner.arch }}-pico-sdk-${{ env.PICO_SDK_REF }}-tinyusb-${{ env.TINYUSB_REF }}
-
-      - name: Download Pico SDK
-        if: steps.cache-pico-sdk.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch "$PICO_SDK_REF" https://github.com/raspberrypi/pico-sdk.git "$PICO_SDK_PATH"
-          git -C "$PICO_SDK_PATH" submodule update --init --recursive
-
-      - name: Switch TinyUSB to configured tag
-        run: |
-          if ! git -C "$PICO_SDK_PATH/lib/tinyusb" rev-parse -q --verify "refs/tags/$TINYUSB_REF" >/dev/null; then
-            git -C "$PICO_SDK_PATH/lib/tinyusb" fetch --depth 1 origin "refs/tags/$TINYUSB_REF:refs/tags/$TINYUSB_REF"
+          if [ ! -f "${GITHUB_WORKSPACE}/pico-sdk/pico_sdk_version.cmake" ]; then
+            git clone --depth 1 --branch "${PICO_SDK_VERSION}" \
+              https://github.com/raspberrypi/pico-sdk.git "${GITHUB_WORKSPACE}/pico-sdk"
           fi
-          git -C "$PICO_SDK_PATH/lib/tinyusb" checkout --detach "$TINYUSB_REF"
 
-      - name: Build standard firmware
+      # ---- 3. 初始化 SDK 子模块 ----
+      - name: Init Pico SDK submodules
+        working-directory: ${{ github.workspace }}/pico-sdk
         run: |
-          cmake -S . -B build/standard -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_PATH="$PICO_SDK_PATH"
-          cmake --build build/standard --target ds5-bridge
-          mkdir -p artifacts
-          cp build/standard/ds5-bridge.uf2 artifacts/ds5-bridge.uf2
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}/pico-sdk"
+          for mod in btstack cyw43-driver lwip mbedtls tinyusb; do
+            if [ -z "$(ls -A "lib/${mod}" 2>/dev/null)" ]; then
+              git submodule update --init --depth 1 "lib/${mod}"
+            fi
+          done
 
-      - name: Build Debug firmware
+      # ---- 4. 升级 TinyUSB 到指定版本 ----
+      - name: Upgrade TinyUSB
+        working-directory: ${{ github.workspace }}/pico-sdk/lib/tinyusb
         run: |
-          cmake -S . -B build/debug -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
-            -DENABLE_SERIAL=ON \
-            -DENABLE_VERBOSE=ON
-          cmake --build build/debug --target ds5-bridge
-          cp build/debug/ds5-bridge.uf2 artifacts/ds5-bridge-debug.uf2
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}/pico-sdk/lib/tinyusb"
+          CURRENT_TINYUSB=$(git describe --tags 2>/dev/null || echo "unknown")
+          echo "当前 TinyUSB 版本: ${CURRENT_TINYUSB}"
+          if [ "${CURRENT_TINYUSB}" != "${TINYUSB_VERSION}" ]; then
+            git fetch --depth 1 origin tag "${TINYUSB_VERSION}"
+            git checkout "${TINYUSB_VERSION}"
+          fi
 
-      - name: Build no-batt-led firmware (compile check only)
+      # ---- 5. CMake 配置 ----
+      - name: Configure (CMake)
         run: |
-          cmake -S . -B build/no-batt-led -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
-            -DENABLE_BATT_LED=OFF
-          cmake --build build/no-batt-led --target ds5-bridge
+          mkdir -p "${GITHUB_WORKSPACE}/build"
+          cd "${GITHUB_WORKSPACE}/build"
+          PICO_SDK_PATH="${GITHUB_WORKSPACE}/pico-sdk" cmake "${GITHUB_WORKSPACE}" \
+            -G Ninja \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build Pico W firmware
-        run: |
-          cmake -S . -B build/picow -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
-            -DPICO_W_BUILD=ON
-          cmake --build build/picow --target ds5-bridge
-          cp build/picow/ds5-bridge.uf2 artifacts/ds5-bridge-picow.uf2
+      # ---- 6. 编译 ----
+      - name: Build (Ninja)
+        working-directory: ${{ github.workspace }}/build
+        run: ninja
 
-      - name: Upload standard UF2 artifact
-        uses: actions/upload-artifact@v7
+      # ---- 7. 上传产物 ----
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: artifacts/ds5-bridge.uf2
-          archive: false
-          if-no-files-found: error
-
-      - name: Upload Debug UF2 artifact
-        uses: actions/upload-artifact@v7
-        with:
-          path: artifacts/ds5-bridge-debug.uf2
-          archive: false
-          if-no-files-found: error
-
-      - name: Upload PicoW UF2 artifact
-        uses: actions/upload-artifact@v7
-        with:
-          path: artifacts/ds5-bridge-picow.uf2
-          archive: false
+          name: ds5-bridge-uf2
+          path: ${{ github.workspace }}/build/ds5-bridge.uf2
           if-no-files-found: error
