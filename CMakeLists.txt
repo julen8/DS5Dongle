@@ -1,29 +1,8 @@
-# Generated Cmake Pico project file
-
 cmake_minimum_required(VERSION 3.26)
 
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# Initialise pico_sdk from installed location
-# (note this can come from environment, CMake cache etc)
-
-# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
-if (WIN32)
-    set(USERHOME $ENV{USERPROFILE})
-else ()
-    set(USERHOME $ENV{HOME})
-endif ()
-set(sdkVersion 2.2.0)
-set(toolchainVersion 14_2_Rel1)
-set(picotoolVersion 2.2.0-a4)
-set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
-if (EXISTS ${picoVscode})
-    include(${picoVscode})
-endif ()
-# ====================================================================================
 
 set(PICO_BOARD pico2_w CACHE STRING "Board type")
 
@@ -42,7 +21,6 @@ project(ds5-bridge C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# Add executable. Default name is the project name, version 0.1
 
 add_executable(ds5-bridge
         src/usb_descriptors.c
@@ -53,52 +31,33 @@ add_executable(ds5-bridge
         src/config.c
         src/bluetoothPacket.c
         src/crc32.c
+        src/lerp_resampler.c
 )
 
 target_include_directories(ds5-bridge PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/inc
 )
 
-# Cockos WDLResampler
-add_library(wdl_resampler STATIC
-        lib/WDL/WDL/resample.cpp
-        src/wdlResample.cpp
-)
-target_include_directories(wdl_resampler PUBLIC
-        lib/WDL/WDL
-        ${CMAKE_CURRENT_LIST_DIR}/inc
-)
-
 # Opus
-#set(OPUS_FIXED_POINT ON)
+set(OPUS_FIXED_POINT ON)
+set(HAVE_LRINTF ON)
+set(OPUS_ENABLE_FLOAT_API OFF)
 add_subdirectory(lib/opus)
 
-target_compile_options(wdl_resampler PRIVATE -fsigned-char -O3 -mfloat-abi=softfp)
 target_compile_options(ds5-bridge PRIVATE -fsigned-char -Wall -O3 -Wdouble-promotion -mfloat-abi=softfp)
 target_compile_options(opus PRIVATE -O3 -mfloat-abi=softfp)
-target_compile_definitions(wdl_resampler PRIVATE
-        WDL_RESAMPLE_TYPE=float
-)
+
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         PICO_FLASH_ASSUME_CORE1_SAFE=1
-        WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "0.5.3")
 
-# Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(ds5-bridge 1)
 pico_enable_stdio_usb(ds5-bridge 0)
-
-# Add the standard include files to the build
-#target_include_directories(ds5-bridge PRIVATE
-#        ${CMAKE_CURRENT_LIST_DIR}
-#)
-
 
 target_link_libraries(ds5-bridge
         pico_stdlib
@@ -107,14 +66,11 @@ target_link_libraries(ds5-bridge
         hardware_timer
         hardware_flash
         pico_btstack_classic
-        #        pico_cyw43_arch_threadsafe_background
         pico_cyw43_arch_poll
         pico_btstack_cyw43
         tinyusb_device
         tinyusb_board
-        wdl_resampler
         opus
 )
 
 pico_add_extra_outputs(ds5-bridge)
-

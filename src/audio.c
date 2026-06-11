@@ -13,9 +13,9 @@
 #include "bluetoothPacket.h"
 #include "bt.h"
 #include "config.h"
+#include "lerp_resampler.h"
 #include "log.h"
 #include "utils.h"
-#include "wdlResample.h"
 
 #define USE_CIC_FOR_HAPTIC 1
 
@@ -35,6 +35,9 @@
 
 constexpr int inputChannels = 4;                    // 固定不能修改
 [[maybe_unused]] constexpr int hapticChannels = 2;  // 固定不能修改
+constexpr int audioChannels = 2;                    // 固定不能修改
+constexpr int audioResamplerInputFrames = 32;       // 512 / audioResamplerOutToOpusInCount
+constexpr int audioResamplerOutputFrames = 30;      // 480 / audioResamplerOutToOpusInCount
 constexpr int audioRawElementSize = 16;             // 音频原始数据缓冲buf数量
 constexpr int readRawFrames = 48;                   // 每次读取多少帧原始数据
 constexpr int rawSamplingRate = 48000;              // 固定不能修改
@@ -64,6 +67,7 @@ static struct {
     struct AudioRawElement audioRawElementArray[audioRawElementSize];
     int8_t* hapticBuf;
     struct AudioRawElement* currentAudioRawElement;
+    lerpRs audioResampler;
     uint32_t rawPos;
     int hapticBufPos;
     int audioBufPos;
@@ -306,15 +310,15 @@ void audioLoop() {
 
 void core1Entry() {
     uint8_t count = 0;
-    static float opusInBuf[audioOpusInFrames * audioChannels];
-    float* resampleOutBuf = opusInBuf;
+    static int16_t opusInBuf[audioOpusInFrames * audioChannels];
+    int16_t* resampleOutBuf = opusInBuf;
     struct AudioRawElement* audioRawElement = nullptr;
 
     for (;;) {
         audio.audioWaitData = true;
         queue_remove_blocking(&audio.audioRawFifo, (void*)&audioRawElement);
         if (!config.audioActive) {
-            audioResamplerReset();
+            lerpRsReset(&audio.audioResampler);
             freeAudioRawElement(audioRawElement);
             audioRawElement = nullptr;
             resampleOutBuf = opusInBuf;
@@ -324,22 +328,9 @@ void core1Entry() {
         audio.audioWaitData = false;
 
         // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
-        float* inBuf = nullptr;
-        const int frames = audioResamplerPrepare(audioResamplerInputFrames, audioChannels, &inBuf);
-
-        const int framesToCopy = MIN(frames, audioResamplerInputFrames);
-        for (int i = 0; i < framesToCopy * audioChannels; i++) {
-            inBuf[i] = (float)audioRawElement->data[i] / (float)(INT16_MAX + 1);
-        }
+        const int outFrames = lerpRsProcess(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, resampleOutBuf, audioResamplerOutputFrames);
         freeAudioRawElement(audioRawElement);
         audioRawElement = nullptr;
-
-        if (frames > framesToCopy) {
-            LOGI("frames > framesToCopy: %d", frames - framesToCopy);
-            memset(inBuf + (framesToCopy * audioChannels), 0, (frames - framesToCopy) * audioChannels * sizeof(float));
-        }
-
-        const int outFrames = audioResamplerOut(resampleOutBuf, frames, audioResamplerOutputFrames, audioChannels);
         if (outFrames != audioResamplerOutputFrames) {
             LOGE("ResampleOut failed, outFrames:%d", outFrames);
         }
@@ -357,7 +348,7 @@ void core1Entry() {
             LOGW("Opus get out buf err");
             continue;
         }
-        const int encodedBytes = opus_encode_float(audio.encoder, opusInBuf, audioOpusInFrames, audioOut, subPacketAudioSize);
+        const int encodedBytes = opus_encode(audio.encoder, opusInBuf, audioOpusInFrames, audioOut, subPacketAudioSize);
         if (encodedBytes < 0) {
             LOGE("opus_encode_float failed:%d", encodedBytes);
             freeSubPacket(audioOut, subPacketTypeAudio);
@@ -375,7 +366,7 @@ void core1Entry() {
 }
 
 void audioInit() {
-    audioResamplerInit();
+    lerpRsInit(&audio.audioResampler, 51200, 48000, audioChannels);
 
     for (int i = 0; i < audioRawElementSize; ++i) {
         atomic_init(&audio.audioRawElementArray[i].inuse, false);
