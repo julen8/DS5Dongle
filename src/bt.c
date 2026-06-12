@@ -4,6 +4,7 @@
 
 #include "bt.h"
 
+#include <assert.h>
 #include <bsp/board_api.h>
 #include <btstack_event.h>
 #include <classic/sdp_server.h>
@@ -18,7 +19,7 @@
 #include "config.h"
 #include "crc32.h"
 #include "log.h"
-#include "utils.h"
+#include "state.h"
 
 #define MTU_CONTROL 672
 #define MTU_INTERRUPT 672
@@ -33,7 +34,6 @@ static bool newPair = false;  // 只有新匹配的设备才用创建channel，�
 static hci_con_handle_t aclHandle = HCI_CON_HANDLE_INVALID;
 static uint16_t hidControlCid;
 static uint16_t hidInterruptCid;
-static bt_data_callback_t btDataCallback = nullptr;
 static bool checkDse = false;
 static bool theRequestHasBeenSent = false;
 
@@ -77,8 +77,6 @@ static struct FeatureSlot* allocFeatureSlot(const uint8_t reportId) {
 }
 
 absolute_time_t inactiveTime = 0;  // 手柄长时间静默
-
-void btRegisterDataCallback(const bt_data_callback_t callback) { btDataCallback = callback; }
 
 static inline bool btDisconnect() {
     if (aclHandle == HCI_CON_HANDLE_INVALID) {
@@ -323,16 +321,17 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
 }
 
 static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel, uint8_t* packet, const uint16_t size) {
-    (void)channel;
-
     if (packet_type == L2CAP_DATA_PACKET) {
         if (channel == hidInterruptCid) {
-            btDataCallback(INTERRUPT, packet, size);
+            if (size - 3 >= ds5StatePacketSize && packet[1] == 0x31) {
+                union Ds5StateUnion* ds5StateUnion = (union Ds5StateUnion*)(packet + 3);
+                setStatePacket(ds5StateUnion);
 
-            // 静默检测（访问 packet[3..12]，需要至少 13 字节）
-            if (size >= 13) {
-                if (packet[3] < 120 || packet[3] > 140 || packet[4] < 120 || packet[4] > 140 || packet[5] < 120 || packet[5] > 140 || packet[6] < 120 || packet[6] > 140 || packet[7] > 0 ||
-                    packet[8] > 0 || packet[10] != 0x08 || packet[11] != 0x00 || packet[12] != 0x00) {
+                // 静默检测
+                if (ds5StateUnion->packet.LeftStickX < 120 || ds5StateUnion->packet.LeftStickX > 140 || ds5StateUnion->packet.LeftStickY < 120 || ds5StateUnion->packet.LeftStickY > 140 ||
+                    ds5StateUnion->packet.RightStickX < 120 || ds5StateUnion->packet.RightStickX > 140 || ds5StateUnion->packet.RightStickY < 120 || ds5StateUnion->packet.RightStickY > 140 ||
+                    ds5StateUnion->packet.TriggerLeft > 0 || ds5StateUnion->packet.TriggerRight > 0 || ds5StateUnion->data[7] != DirectionNone || ds5StateUnion->data[8] != 0x00 ||
+                    ds5StateUnion->data[9] != 0x00) {
                     inactiveTime = get_absolute_time();
                 } else if (absolute_time_diff_us(inactiveTime, get_absolute_time()) > (int64_t)(config.inactiveTime) * 60 * 1000 * 1000) {
                     LOGI("disconnect when inactive");
@@ -380,8 +379,6 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
 #if ENABLE_DEBUG
             printf_hexdump(packet, size);
 #endif
-
-            btDataCallback(CONTROL, packet, size);
         } else {
             LOGE("[L2CAP] Data on unknown channel 0x%04X (Interrupt: 0x%04X, Control: 0x%04X)", channel, hidInterruptCid, hidControlCid);
         }
@@ -410,12 +407,13 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
                     LOGI("Init DualSense");
                     initFeature();
                     // 初始化手柄状态
-                    uint8_t* statusBuffer = getBufferForSubPacket(subPacketTypeStatus);
-                    if (statusBuffer != nullptr) {
-                        memcpy(statusBuffer, stateInitData, subPacketStatusSize);
-                        writeSubPacket(statusBuffer, subPacketTypeStatus);
+                    uint8_t* controlBuffer = getBufferForSubPacket(subPacketTypeControl);
+                    if (controlBuffer != nullptr) {
+                        static_assert(subPacketControlSize == ds5ControlPacketSize, "subPacketControlSize != ds5ControlPacketSize");
+                        memcpy(controlBuffer, ds5ControlInitPacket.data, subPacketControlSize);
+                        writeSubPacket(controlBuffer, subPacketTypeControl);
                     } else {
-                        LOGE("getBufferForSubPacket subPacketTypeStatus");
+                        LOGE("getBufferForSubPacket subPacketTypeControl");
                     }
 
                     [[maybe_unused]] const uint16_t mtu = l2cap_get_remote_mtu_for_local_cid(hidInterruptCid);

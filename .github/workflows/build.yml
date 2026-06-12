@@ -83,7 +83,6 @@ jobs:
           cd "${GITHUB_WORKSPACE}/build"
           PICO_SDK_PATH="${GITHUB_WORKSPACE}/pico-sdk" cmake "${GITHUB_WORKSPACE}" \
             -G Ninja \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DCMAKE_BUILD_TYPE=Release
 
       # ---- 6. 编译 ----

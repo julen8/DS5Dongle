@@ -4,3 +4,4 @@ build
 example
 /pico-sdk/
 compile_commands.json
+.cache

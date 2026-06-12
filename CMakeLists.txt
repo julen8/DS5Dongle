@@ -9,9 +9,6 @@ set(PICO_BOARD pico2_w CACHE STRING "Board type")
 #set(PICO_CYW43_SUPPORTED 1)
 #set(PICO_CYW43_ARCH_THREADSAFE_BACKGROUND 1)
 
-set(CYW43_PIO_CLOCK_DIV_VALUE 5)
-set(SYS_CLOCK_KHZ_VALUE 320000)
-
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
@@ -32,6 +29,7 @@ add_executable(ds5-bridge
         src/bluetoothPacket.c
         src/crc32.c
         src/lerp_resampler.c
+        src/state.c
 )
 
 target_include_directories(ds5-bridge PRIVATE
@@ -50,8 +48,7 @@ target_compile_options(opus PRIVATE -O3 -mfloat-abi=softfp)
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         PICO_FLASH_ASSUME_CORE1_SAFE=1
-        CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
-        SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
+        CYW43_PIO_CLOCK_DIV_INT=5
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")

@@ -4,6 +4,7 @@
 
 #include "audio.h"
 
+#include <assert.h>
 #include <opus.h>
 #include <pico/multicore.h>
 #include <pico/util/queue.h>
@@ -15,7 +16,6 @@
 #include "config.h"
 #include "lerp_resampler.h"
 #include "log.h"
-#include "utils.h"
 
 #define USE_CIC_FOR_HAPTIC 1
 

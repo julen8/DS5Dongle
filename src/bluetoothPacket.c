@@ -1,6 +1,6 @@
 #include "bluetoothPacket.h"
 
-#include <math.h>
+#include <assert.h>
 #include <pico/util/queue.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -10,7 +10,6 @@
 #include "config.h"
 #include "crc32.h"
 #include "log.h"
-#include "utils.h"
 
 /*
 一个蓝牙包结构:
@@ -26,7 +25,7 @@ crc32                 (4) ds5BluetoothPacketCrc32Size
 /*
 // DS5 SUB-PACKET:
 subpacket head        (2)  subPacketHeadSize
-subpacket content    (HapticSetup:7 , Haptic:64, status:63, Audio:200)
+subpacket content    (HapticSetup:7 , Haptic:64, control:63, Audio:200)
 */
 
 /*
@@ -68,7 +67,7 @@ constexpr int subPacketHapticSetupSize = 7;
 constexpr int ds5BluetoothPacketCrc32Size = 4;
 
 constexpr int subPacketBuffHapticCount = 2;
-constexpr int subPacketBuffStatusCount = 2;
+constexpr int subPacketBuffControlCount = 2;
 constexpr int subPacketBuffAudioCount = 2;
 constexpr int bluetoothRawPacketCount = 3;
 
@@ -82,9 +81,9 @@ struct SubPacketBufferHaptic {
     volatile bool inuse;
     uint8_t buf[subPacketHapticSize];
 };
-struct SubPacketBufferStatus {
+struct SubPacketBufferControl {
     volatile bool inuse;
-    uint8_t buf[subPacketStatusSize];
+    uint8_t buf[subPacketControlSize];
 };
 struct SubPacketBufferAudio {
     // audio 缓冲在 core1 分配、core0 释放，使用原子标志避免跨核竞争
@@ -136,12 +135,12 @@ struct BluetoothRawPacket {
 
 static struct {
     struct SubPacketBufferHaptic subPacketBufferHaptic[subPacketBuffHapticCount];
-    struct SubPacketBufferStatus subPacketBufferStatus[subPacketBuffStatusCount];
+    struct SubPacketBufferControl subPacketBufferControl[subPacketBuffControlCount];
     struct SubPacketBufferAudio subPacketBufferAudio[subPacketBuffAudioCount];
     struct BluetoothRawPacket bluetoothRawPacket[bluetoothRawPacketCount];
 
     queue_t subPacketHapticQueue;
-    queue_t subPacketStatusQueue;
+    queue_t subPacketControlQueue;
     queue_t subPacketAudioQueue;
 
     uint8_t reportSeqCounter;
@@ -181,33 +180,33 @@ static inline uint8_t* getSubPacketBufferHaptic() {
     return ret;
 }
 
-static inline uint8_t* tryGetSubPacketBufferStatus() {
-    for (int i = 0; i < subPacketBuffStatusCount; i++) {
-        if (!bluetoothPacket.subPacketBufferStatus[i].inuse) {
-            bluetoothPacket.subPacketBufferStatus[i].inuse = true;
-            return bluetoothPacket.subPacketBufferStatus[i].buf;
+static inline uint8_t* tryGetSubPacketBufferControl() {
+    for (int i = 0; i < subPacketBuffControlCount; i++) {
+        if (!bluetoothPacket.subPacketBufferControl[i].inuse) {
+            bluetoothPacket.subPacketBufferControl[i].inuse = true;
+            return bluetoothPacket.subPacketBufferControl[i].buf;
         }
     }
 
     return nullptr;
 }
 
-static inline uint8_t* getSubPacketBufferStatus() {
-    uint8_t* ret = tryGetSubPacketBufferStatus();
+static inline uint8_t* getSubPacketBufferControl() {
+    uint8_t* ret = tryGetSubPacketBufferControl();
     if (ret == nullptr) {
-        // status 只需要有最后一次的就行
-        uint8_t* statusData = nullptr;
-        while (queue_try_remove(&bluetoothPacket.subPacketStatusQueue, &statusData)) {
-            if (statusData != nullptr) {
-                freeSubPacket(statusData, subPacketTypeStatus);
+        // control 只需要有最后一次的就行
+        uint8_t* controlData = nullptr;
+        while (queue_try_remove(&bluetoothPacket.subPacketControlQueue, &controlData)) {
+            if (controlData != nullptr) {
+                freeSubPacket(controlData, subPacketTypeControl);
             }
         }
 
-        ret = tryGetSubPacketBufferStatus();
+        ret = tryGetSubPacketBufferControl();
     }
 
     if (ret == nullptr) {
-        LOGE("No free subPacketBufferStatus");
+        LOGE("No free subPacketBufferControl");
     }
     return ret;
 }
@@ -249,8 +248,8 @@ void bluetoothPacketInit() {
     for (int i = 0; i < subPacketBuffHapticCount; i++) {
         bluetoothPacket.subPacketBufferHaptic[i].inuse = false;
     }
-    for (int i = 0; i < subPacketBuffStatusCount; i++) {
-        bluetoothPacket.subPacketBufferStatus[i].inuse = false;
+    for (int i = 0; i < subPacketBuffControlCount; i++) {
+        bluetoothPacket.subPacketBufferControl[i].inuse = false;
     }
     for (int i = 0; i < subPacketBuffAudioCount; i++) {
         atomic_init(&bluetoothPacket.subPacketBufferAudio[i].inuse, false);
@@ -264,14 +263,14 @@ void bluetoothPacketInit() {
     bluetoothPacket.packetCounter = 0;
 
     queue_init(&bluetoothPacket.subPacketHapticQueue, sizeof(uint8_t*), subPacketBuffHapticCount);
-    queue_init(&bluetoothPacket.subPacketStatusQueue, sizeof(uint8_t*), subPacketBuffStatusCount);
+    queue_init(&bluetoothPacket.subPacketControlQueue, sizeof(uint8_t*), subPacketBuffControlCount);
     queue_init(&bluetoothPacket.subPacketAudioQueue, sizeof(uint8_t*), subPacketBuffAudioCount);
 }
 
 uint8_t* getBufferForSubPacket(const enum subPacketType type) {
     switch (type) {
-        case subPacketTypeStatus:
-            return getSubPacketBufferStatus();
+        case subPacketTypeControl:
+            return getSubPacketBufferControl();
         case subPacketTypeHaptic:
             return getSubPacketBufferHaptic();
         case subPacketTypeAudio:
@@ -288,8 +287,8 @@ void freeSubPacket(uint8_t* buffer, const enum subPacketType type) {
     }
 
     switch (type) {
-        case subPacketTypeStatus: {
-            struct SubPacketBufferStatus* pkt = container_of(buffer, struct SubPacketBufferStatus, buf);
+        case subPacketTypeControl: {
+            struct SubPacketBufferControl* pkt = container_of(buffer, struct SubPacketBufferControl, buf);
             pkt->inuse = false;
             break;
         }
@@ -310,9 +309,9 @@ void freeSubPacket(uint8_t* buffer, const enum subPacketType type) {
 
 void writeSubPacket(uint8_t* buffer, const enum subPacketType type) {
     switch (type) {
-        case subPacketTypeStatus: {
-            if (!queue_try_add(&bluetoothPacket.subPacketStatusQueue, &buffer)) {
-                LOGW("subPacketStatus add failed");
+        case subPacketTypeControl: {
+            if (!queue_try_add(&bluetoothPacket.subPacketControlQueue, &buffer)) {
+                LOGW("subPacketControl add failed");
                 freeSubPacket(buffer, type);
             }
             break;
@@ -395,7 +394,7 @@ bool hasBluetoothRawPacketCanSend() {
     const uint hapticCount = queue_get_level(&bluetoothPacket.subPacketHapticQueue);
     const uint audioCount = queue_get_level(&bluetoothPacket.subPacketAudioQueue);
 
-    // 有音频数据的时候就把status放到音频数据中发送，防止发送过于频繁
+    // 有音频数据的时候就把control放到音频数据中发送，防止发送过于频繁
     if (config.audioActive) {
         // 最好的情况是audio和haptic一起发送
         if (hapticCount > 0 && audioCount > 0) {
@@ -410,8 +409,8 @@ bool hasBluetoothRawPacketCanSend() {
         return false;
     }
 
-    const uint statusCount = queue_get_level(&bluetoothPacket.subPacketStatusQueue);
-    return (hapticCount + statusCount + audioCount) > 0;
+    const uint controlCount = queue_get_level(&bluetoothPacket.subPacketControlQueue);
+    return (hapticCount + controlCount + audioCount) > 0;
 }
 
 // Sub-Packet  0x11: HAPTICS_SETUP（音频配置帧） （共 9 字节）
@@ -459,23 +458,23 @@ static inline int setHapticSubPacket(uint8_t* buffer, const uint8_t* hapticData)
     return subPacketHeadSize + subPacketHapticSize;
 }
 
-// Sub-packet 0x10 : status
+// Sub-packet 0x10 : control
 /*
-[0x90]      [0x3F]    [status data × 63 bytes ...]
- PID        len=63   status data
+[0x90]      [0x3F]    [control data × 63 bytes ...]
+ PID        len=63   control data
 // STATUS_DATA = 0x12, // STATUS数据 63字节
 // DUALSENSE_BT_REPORT_MASK_HAS_LENGTH = 1 << 7,  // 0x80 — 修饰位：有 length 字段
 // DUALSENSE_BT_REPORT_MASK_HAS_DOUBLE = 1 << 6,  // 0x40 — 修饰位：双通道扩展 (默认不设置)
 */
-static inline int setStatusSubPacket(uint8_t* buffer, const uint8_t* statusData) {
+static inline int setControlSubPacket(uint8_t* buffer, const uint8_t* controlData) {
     // sub packet head
     buffer[0] = (0x10 | 1 << 7) & (~(1 << 6));
-    buffer[1] = subPacketStatusSize;
+    buffer[1] = subPacketControlSize;
     // sub packet content
-    memcpy(buffer + subPacketHeadSize, statusData, subPacketStatusSize);
+    memcpy(buffer + subPacketHeadSize, controlData, subPacketControlSize);
 
-    static_assert(subPacketHeadSize + subPacketStatusSize == 65, "status sub packet size should be 65");
-    return subPacketHeadSize + subPacketStatusSize;
+    static_assert(subPacketHeadSize + subPacketControlSize == 65, "control sub packet size should be 65");
+    return subPacketHeadSize + subPacketControlSize;
 }
 
 // Sub-Packet Speaker: 0x13,  L Headset Mono: 0x14, L Headset R Speaker: 0x15, Headset: 0x16 (共 202 字节)
@@ -497,11 +496,11 @@ static inline int setAudioSubPacket(uint8_t* buffer, const uint8_t* audioData) {
     return subPacketHeadSize + subPacketAudioSize;
 }
 
-static inline void packed(const uint8_t* statusData, uint8_t** hapticData, uint8_t** audioData, struct BluetoothRawPacket* pkt) {
+static inline void packed(const uint8_t* controlData, uint8_t** hapticData, uint8_t** audioData, struct BluetoothRawPacket* pkt) {
     size_t offset = bluetoothRawPacketHeadSize + ds5BluetoothPacketHeadSize;
 
-    if (statusData != nullptr) {
-        offset += setStatusSubPacket(pkt->data + offset, statusData);
+    if (controlData != nullptr) {
+        offset += setControlSubPacket(pkt->data + offset, controlData);
     }
 
     bool addedHapticSetup = false;
@@ -539,7 +538,7 @@ static inline void packed(const uint8_t* statusData, uint8_t** hapticData, uint8
 uint8_t* getBluetoothRawPacket(size_t* size) {
     uint8_t* hapticData[2] = {nullptr, nullptr};
     uint8_t* audioData[2] = {nullptr, nullptr};
-    uint8_t* statusData = nullptr;
+    uint8_t* controlData = nullptr;
     size_t pktSize = 0;
 
     // 优先尝试拿两个hapticData
@@ -574,17 +573,17 @@ uint8_t* getBluetoothRawPacket(size_t* size) {
         // 9
     }
 
-    // audioActive时把statusData一起发送，防止发送频繁
+    // audioActive时把controlData一起发送，防止发送频繁
     if (config.audioActive && pktSize == 0) {
         // 没有hapticData 没有audioData
         return nullptr;
     }
 
-    // 尝试拿statusData
-    queue_try_remove(&bluetoothPacket.subPacketStatusQueue, &statusData);
-    if (statusData != nullptr) {
+    // 尝试拿controlData
+    queue_try_remove(&bluetoothPacket.subPacketControlQueue, &controlData);
+    if (controlData != nullptr) {
         pktSize += subPacketHeadSize;
-        pktSize += subPacketStatusSize;
+        pktSize += subPacketControlSize;
         // 65
     }
 
@@ -598,7 +597,7 @@ uint8_t* getBluetoothRawPacket(size_t* size) {
     pktSize += ds5BluetoothPacketCrc32Size;
     // 7
 
-    // 可以判断一下是否还能再装一个audioData (当只有一个hapticData + 一个audioData + 没有statusData的时候，剩余空间是够的)
+    // 可以判断一下是否还能再装一个audioData (当只有一个hapticData + 一个audioData + 没有controlData的时候，剩余空间是够的)
     if ((bluetoothRawPacketDataSize0x39 - pktSize) > (subPacketHeadSize + subPacketAudioSize)) {
         if (audioData[0] == nullptr && audioData[1] != nullptr) {
             audioData[0] = audioData[1];
@@ -616,7 +615,7 @@ uint8_t* getBluetoothRawPacket(size_t* size) {
     }
 
     // 最大size能够支持 bluetoothRawPacketDataSize0x39 -> 548
-    // 最大的情况: 1. 两个音频包，那么就要少一个hapticData或者少一个statusData
+    // 最大的情况: 1. 两个音频包，那么就要少一个hapticData或者少一个controlData
     //           2. 1个音频包两个haptic包
 
     struct BluetoothRawPacket* pkt = newBluetoothRawPacket(pktSize);
@@ -625,16 +624,16 @@ uint8_t* getBluetoothRawPacket(size_t* size) {
         freeSubPacket(hapticData[1], subPacketTypeHaptic);
         freeSubPacket(audioData[0], subPacketTypeAudio);
         freeSubPacket(audioData[1], subPacketTypeAudio);
-        freeSubPacket(statusData, subPacketTypeStatus);
+        freeSubPacket(controlData, subPacketTypeControl);
         return nullptr;
     }
 
-    packed(statusData, hapticData, audioData, pkt);
+    packed(controlData, hapticData, audioData, pkt);
     freeSubPacket(hapticData[0], subPacketTypeHaptic);
     freeSubPacket(hapticData[1], subPacketTypeHaptic);
     freeSubPacket(audioData[0], subPacketTypeAudio);
     freeSubPacket(audioData[1], subPacketTypeAudio);
-    freeSubPacket(statusData, subPacketTypeStatus);
+    freeSubPacket(controlData, subPacketTypeControl);
 
     *size = pkt->size;
     return pkt->data;

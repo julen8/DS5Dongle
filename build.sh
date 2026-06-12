@@ -29,6 +29,7 @@ PACKAGES=(
     libstdc++-arm-none-eabi-newlib
     binutils-arm-none-eabi
     ca-certificates
+    ccache
 )
 MISSING=()
 for pkg in "${PACKAGES[@]}"; do
@@ -99,7 +100,7 @@ info "CMake 配置中..."
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 export PICO_SDK_PATH="${PICO_SDK_DIR}"
-PICO_SDK_PATH="${PICO_SDK_DIR}" cmake "${WORK_DIR}" -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_BUILD_TYPE=Release
+PICO_SDK_PATH="${PICO_SDK_DIR}" cmake "${WORK_DIR}" -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 ok "CMake 配置完成"
 
 # ---- 6. 编译 ----
