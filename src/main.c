@@ -58,13 +58,14 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         }
         switch (buffer[0]) {
             case 0x02: {
+                if (bufsize - 1 < subPacketControlSize) {
+                    LOGE("Received control sub packet with size %d, expected %d", bufsize - 1, subPacketControlSize);
+                    break;
+                }
+
                 uint8_t *controlBuffer = getBufferForSubPacket(subPacketTypeControl);
                 if (controlBuffer != nullptr) {
-                    const int size = ((bufsize - 1) < subPacketControlSize) ? (bufsize - 1) : subPacketControlSize;
-                    memcpy(controlBuffer, buffer + 1, size);
-                    if (size < subPacketControlSize) {
-                        memset(controlBuffer + size, 0, subPacketControlSize - size);
-                    }
+                    memcpy(controlBuffer, buffer + 1, subPacketControlSize);
                     writeSubPacket(controlBuffer, subPacketTypeControl);
                 } else {
                     LOGE("getBufferForSubPacket subPacketTypeControl");
@@ -76,6 +77,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 break;
         }
     }
+
     if (report_id == 0x80 ||
         // DSE: Write Profile Block
         report_id == 0x60 || report_id == 0x62 || report_id == 0x61) {
