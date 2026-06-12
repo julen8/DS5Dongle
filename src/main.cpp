@@ -87,7 +87,13 @@ void interrupt_loop() {
 
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // printf("[Main] BT data callback: channel=%u len=%u\n", channel, len);
-    if (channel == INTERRUPT && data[1] == 0x31) {
+    if (channel == INTERRUPT && len > 2 && data[1] == 0x31) {
+        // Mic audio: controller signals mic payload via bit1 of data[2];
+        // the opus-encoded mic frame starts at data+4.
+        if (data[2] >> 1 & 1) {
+            mic_add_queue(data + 4);
+            return;
+        }
         if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
             set_headset(data[56] & 1);
         }
