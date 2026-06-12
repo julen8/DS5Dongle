@@ -58,14 +58,18 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         }
         switch (buffer[0]) {
             case 0x02: {
-                if (bufsize - 1 < subPacketControlSize) {
-                    LOGE("Received control sub packet with size %d, expected %d", bufsize - 1, subPacketControlSize);
+                const int size = MIN(bufsize - 1, subPacketControlSize);
+                if (size < ds5ControlPayloadSize) {
+                    LOGE("Received control sub packet with size %d, expected %d", bufsize - 1, ds5ControlPayloadSize);
                     break;
                 }
 
                 uint8_t *controlBuffer = getBufferForSubPacket(subPacketTypeControl);
                 if (controlBuffer != nullptr) {
-                    memcpy(controlBuffer, buffer + 1, subPacketControlSize);
+                    memcpy(controlBuffer, buffer + 1, size);
+                    if (subPacketControlSize > size) {
+                        memset(controlBuffer + size, 0, subPacketControlSize - size);  // zero padding
+                    }
                     writeSubPacket(controlBuffer, subPacketTypeControl);
                 } else {
                     LOGE("getBufferForSubPacket subPacketTypeControl");

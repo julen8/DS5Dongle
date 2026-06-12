@@ -4,6 +4,7 @@
 
 constexpr int ds5StatePacketSize = 63;
 constexpr int ds5ControlPacketSize = 63;
+constexpr int ds5ControlPayloadSize = 47;
 
 enum PowerState : uint8_t {
     PowerStateDischarging = 0x00,          // Use PowerPercent
