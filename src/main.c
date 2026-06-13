@@ -136,9 +136,8 @@ int main() {
     for (;;) {
         watchdog_update();
         cyw43_arch_poll();
-        interruptLoop();
         tud_task();
-        audioLoop();
         interruptLoop();
+        audioLoop();
     }
 }

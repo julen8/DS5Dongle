@@ -26,7 +26,7 @@ struct ConfigType {
         .isDse = false,                            \
         .audioActive = false,                      \
         .inactiveTime = 20,                        \
-        .pollingRateMode = 1,                      \
+        .pollingRateMode = 2,                      \
         .audioBufferLength = 48,                   \
         .controllerMode = 2,                       \
         .mute = {.speaker = 0, .microphone = 0},   \
