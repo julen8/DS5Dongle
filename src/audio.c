@@ -88,7 +88,7 @@ struct HapticCicState {
     int32_t c1R_z, c2R_z, c3R_z;
 };
 
-void resetHapticCicState(struct HapticCicState* state) {
+inline void resetHapticCicState(struct HapticCicState* state) {
     state->i1L = state->i2L = state->i3L = 0;
     state->i1R = state->i2R = state->i3R = 0;
     state->c1L_z = state->c2L_z = state->c3L_z = 0;
@@ -98,7 +98,7 @@ void resetHapticCicState(struct HapticCicState* state) {
 static struct HapticCicState hapticCic;
 #endif
 
-static inline struct AudioRawElement* getAudioRawElement() {
+static inline struct AudioRawElement* __not_in_flash_func(getAudioRawElement)() {
     for (int i = 0; i < audioRawElementSize; ++i) {
         // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
         bool expected = false;
@@ -110,7 +110,7 @@ static inline struct AudioRawElement* getAudioRawElement() {
     return nullptr;
 }
 
-static inline void freeAudioRawElement(struct AudioRawElement* audioRawElement) { atomic_store(&audioRawElement->inuse, false); }
+static inline void __not_in_flash_func(freeAudioRawElement)(struct AudioRawElement* audioRawElement) { atomic_store(&audioRawElement->inuse, false); }
 
 static inline void cleanRemainingData() {
     {
@@ -142,7 +142,7 @@ static inline void cleanRemainingData() {
     cleanAllCachedHaptic();
 }
 
-void audioLoop() {
+void __not_in_flash_func(audioLoop)() {
     if (tud_audio_available() == 0) {
         if (!config.audioActive) {
             // usb已经停止发送pcm数据了,但是这里需要把剩下的缓存的数据处理完
@@ -308,7 +308,7 @@ void audioLoop() {
     }
 }
 
-void core1Entry() {
+void __not_in_flash_func(core1Entry)() {
     uint8_t count = 0;
     static int16_t opusInBuf[audioOpusInFrames * audioChannels];
     int16_t* resampleOutBuf = opusInBuf;

@@ -1,5 +1,6 @@
 #include "crc32.h"
 
+#include <pico/critical_section.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -18,7 +19,7 @@ void initCrc32() {
     }
 }
 
-inline static uint32_t crc32Seeded(const uint8_t *data, size_t size, const uint32_t seed) {
+inline static uint32_t __not_in_flash_func(crc32Seeded)(const uint8_t *data, size_t size, const uint32_t seed) {
     uint32_t crc = ~seed;
 
     while (size--) {
@@ -28,11 +29,11 @@ inline static uint32_t crc32Seeded(const uint8_t *data, size_t size, const uint3
     return ~crc;
 }
 
-inline static uint32_t crc32(const uint8_t *data, size_t size) {
+inline static uint32_t __not_in_flash_func(crc32)(const uint8_t *data, size_t size) {
     return crc32Seeded(data, size, 0xEADA2D49);  // 0xA2 seed
 }
 
-void fillOutputReportChecksum(uint8_t *outputData, size_t len) {
+void __not_in_flash_func(fillOutputReportChecksum)(uint8_t *outputData, size_t len) {
     uint32_t crc = crc32(outputData, len - 4);
     outputData[len - 4] = (crc >> 0) & 0xFF;
     outputData[len - 3] = (crc >> 8) & 0xFF;

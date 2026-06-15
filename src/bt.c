@@ -123,7 +123,7 @@ int btInit() {
     return 0;
 }
 
-static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* packet, uint16_t size) {
+static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t channel, uint8_t* packet, uint16_t size) {
     const uint8_t eventType = hci_event_packet_get_type(packet);
     switch (eventType) {
         case BTSTACK_EVENT_STATE: {
@@ -320,7 +320,7 @@ static void hciPacketHandler(uint8_t packet_type, uint16_t channel, uint8_t* pac
     }
 }
 
-static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel, uint8_t* packet, const uint16_t size) {
+static void __not_in_flash_func(l2capPacketHandler)(const uint8_t packet_type, const uint16_t channel, uint8_t* packet, const uint16_t size) {
     if (packet_type == L2CAP_DATA_PACKET) {
         if (channel == hidInterruptCid) {
             if (size - 3 >= ds5StatePacketSize && packet[1] == 0x31) {
@@ -488,7 +488,7 @@ static void l2capPacketHandler(const uint8_t packet_type, const uint16_t channel
     }
 }
 
-void btRequestSend() {
+void __not_in_flash_func(btRequestSend)() {
     if (hidInterruptCid != 0 && !theRequestHasBeenSent && hasBluetoothRawPacketCanSend()) {
         theRequestHasBeenSent = true;
         l2cap_request_can_send_now_event(hidInterruptCid);

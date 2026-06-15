@@ -1,6 +1,7 @@
 #include "lerp_resampler.h"
 
 #include <math.h>
+#include <pico/critical_section.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -117,13 +118,13 @@ void lerpRsSetRates(lerpRs *rs, uint32_t in_rate_hz, uint32_t out_rate_hz) { rs-
 
 /* Q15 线性插值: y = a + ((b - a) * fq15) >> 15
    |b-a| <= 65535, fq15 <= 32767 → 乘积 ≤ 2^31 - 98303, 安全 fit int32       */
-static inline int16_t q15Lerp(int16_t a16, int16_t b16, int32_t fq15) {
+static inline int16_t __not_in_flash_func(q15Lerp)(int16_t a16, int16_t b16, int32_t fq15) {
     const int32_t a = a16; /* 自动符号扩展 */
     const int32_t b = b16;
     return (int16_t)(a + (((b - a) * fq15) >> 15));
 }
 
-int lerpRsProcess(lerpRs *rs, const int16_t *in, int nin, int16_t *out, int nout_max) {
+int __not_in_flash_func(lerpRsProcess)(lerpRs *rs, const int16_t *in, int nin, int16_t *out, int nout_max) {
     const int nch = rs->nch;
     const uint64_t step = rs->phaseStep;
     int64_t phase = rs->phase;

@@ -20,7 +20,7 @@
 #include "log.h"
 #include "state.h"
 
-void interruptLoop() {
+void __not_in_flash_func(interruptLoop)() {
     if (tud_hid_ready()) {
         if (!tud_hid_report(0x01, getStatePacket()->data, ds5StatePacketSize)) {
             LOGE("[USBHID] tud_hid_report error");
@@ -32,7 +32,6 @@ void interruptLoop() {
 // Application must fill buffer report's content and return its length.
 // Return zero will cause the stack to STALL request
 uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
-    // 直接写入 TinyUSB 提供的 buffer，避免每次 GET_REPORT 都构造临时 std::vector 造成堆分配/拷贝
     return getFeatureData(report_id, buffer, reqlen);
 }
 
@@ -91,10 +90,10 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 }
 
 int main() {
-    vreg_set_voltage(VREG_VOLTAGE_1_20);
-    sleep_ms(1000);
-    constexpr uint32_t sysClockKhz = 320000;
-    set_sys_clock_khz(sysClockKhz, true);
+    // vreg_set_voltage(VREG_VOLTAGE_1_20);
+    // sleep_ms(1000);
+    // constexpr uint32_t sysClockKhz = 320000;
+    // set_sys_clock_khz(sysClockKhz, true);
 
     board_init();
     printf("\n\n===================\nBuild Time: " __DATE__ " " __TIME__ "\n===================\n\n");

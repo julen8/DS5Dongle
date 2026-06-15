@@ -791,6 +791,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
         case STRID_SERIAL:
             chr_count = board_usb_get_serial(_desc_str + 1, 32);
+            _desc_str[chr_count] = '2'; // refresh windows cache (bumped for 2-ch mic)
             break;
 
         default:

@@ -1,7 +1,10 @@
 #include "state.h"
 
 #include <assert.h>
+#include <pico/critical_section.h>
 #include <string.h>
+
+#include "config.h"
 
 static_assert(sizeof(struct Ds5StatePacket) == ds5StatePacketSize, "sizeof(struct Ds5StatePacket) must be 63 bytes long");
 static_assert(sizeof(struct Ds5ControlPacket) == ds5ControlPacketSize, "sizeof(struct Ds5ControlPacket) must be 63 bytes long");
@@ -15,6 +18,12 @@ static union Ds5StateUnion statePacket = {
         },
 };
 
-void setStatePacket(union Ds5StateUnion *packet) { memcpy(statePacket.data, packet->data, ds5StatePacketSize); }
+void __not_in_flash_func(setStatePacket)(union Ds5StateUnion *packet) {
+    if (packet->packet.PluggedHeadphones != statePacket.packet.PluggedHeadphones) {
+        config.plugHeadset = packet->packet.PluggedHeadphones != 0;
+    }
 
-union Ds5StateUnion *getStatePacket() { return &statePacket; }
+    memcpy(statePacket.data, packet->data, ds5StatePacketSize);
+}
+
+union Ds5StateUnion *__not_in_flash_func(getStatePacket)() { return &statePacket; }
