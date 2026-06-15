@@ -70,10 +70,29 @@ void set_headset(bool state) {
 // interface. Gates controller-mic streaming so it only runs while recording.
 void set_mic_active(bool active) {
     mic_active = active;
+    update_mic_status();
 }
 
 bool audio_mic_active() {
     return mic_active;
+}
+
+void update_mic_status() {
+    uint8_t pkt[142]{};
+    pkt[0] = 0x32;
+    pkt[1] = reportSeqCounter << 4;
+    reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+    pkt[2] = 0x11 | 0 << 6 | 1 << 7;
+    pkt[3] = 7;
+    pkt[4] = (mic_active && !get_config().disable_mic) ? 0b11111111 : 0b11111110;
+    const auto buf_len = get_config().audio_buffer_length;
+    pkt[5] = buf_len;
+    pkt[6] = buf_len;
+    pkt[7] = buf_len;
+    pkt[8] = buf_len;
+    pkt[9] = buf_len;
+    pkt[10] = packetCounter++;
+    bt_write(pkt,sizeof(pkt));
 }
 
 void __not_in_flash_func(audio_loop)() {
@@ -279,9 +298,11 @@ static void __not_in_flash_func(mic_proc)() {
 }
 
 void __not_in_flash_func(core1_entry)() {
-    // Register core1 as a flash-safe victim so core0's flash_safe_execute()
-    // (config_save) actually parks this core while flash is erased/programmed,
-    // instead of letting it fault on XIP. Requires PICO_FLASH_ASSUME_CORE1_SAFE=0.
+    // Register core1 as a flash-safe victim so core0's flash_safe_execute() really
+    // parks this core while flash is accessed, instead of letting it fault on XIP.
+    // Used by config_save() (flash erase/program) and the BOOTSEL poll (which briefly
+    // floats QSPI CSn) - the latter makes polling BOOTSEL safe while audio streams on
+    // core1. Requires PICO_FLASH_ASSUME_CORE1_SAFE=0.
     flash_safe_execute_core_init();
     int error = 0;
     encoder = opus_encoder_create(48000, 2,OPUS_APPLICATION_AUDIO, &error);

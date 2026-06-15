@@ -109,6 +109,7 @@ add_executable(ds5-bridge
         src/usb.cpp
         src/audio.cpp
         src/bt.cpp
+        src/button_functions.cpp
         src/dse.cpp
         src/config.cpp
         src/cmd.cpp
@@ -275,6 +276,9 @@ target_compile_definitions(ds5-bridge PRIVATE PICO_EMBED_XIP_SETUP=1)
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
+        # 0 (not 1): flash_safe_execute() must really park core1 while flash is
+        # accessed - both config_save() and the BOOTSEL CSn float poll. core1_entry
+        # registers via flash_safe_execute_core_init().
         PICO_FLASH_ASSUME_CORE1_SAFE=0
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
@@ -287,16 +291,16 @@ target_compile_definitions(ds5-bridge PRIVATE
         DISABLE_SPEAKER_PROC=${DISABLE_SPEAKER_PROC_VALUE}
 )
 
-option(ENABLE_WAKE_HID "Wake the Windows host on PS-button press" OFF)
-if(ENABLE_WAKE_HID)
-    target_compile_definitions(ds5-bridge PRIVATE
-            ENABLE_WAKE_HID
-    )
-    target_sources(ds5-bridge PRIVATE
-            src/wake.cpp
-            src/ps_shortcut.cpp
-     )
-endif()
+# Wake-on-PS + Xbox Game Bar are now in the base firmware, gated at runtime by the
+# enable_wake / ps_shortcut_enabled config fields. ENABLE_WAKE_HID stays defined so
+# the wake/keyboard descriptors and TinyUSB capacity compile in; the interface and
+# behavior are only presented/run when enabled at runtime (see usb_descriptors.cpp,
+# wake.cpp).
+target_compile_definitions(ds5-bridge PRIVATE ENABLE_WAKE_HID)
+target_sources(ds5-bridge PRIVATE
+        src/wake.cpp
+        src/ps_shortcut.cpp
+)
 
 option(WAKE_DEBUG "Print wake-FSM transitions to UART (developer use)" OFF)
 if(WAKE_DEBUG)
