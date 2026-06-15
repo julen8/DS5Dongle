@@ -356,13 +356,14 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
-#if !ENABLE_SERIAL && !defined(ENABLE_WAKE_HID)
-            // Without ENABLE_WAKE_HID we hide the USB device whenever no
-            // controller is paired (upstream behavior). With wake enabled
-            // we must stay on the bus across controller power-cycles, so
-            // tud_suspend_cb can later fire and tud_remote_wakeup() can
-            // signal a wake when the controller is turned back on.
-            tud_disconnect();
+#if !ENABLE_SERIAL
+            // Hide the USB device whenever no controller is paired (upstream
+            // behavior) -- UNLESS wake is enabled at runtime, where we must stay on
+            // the bus across controller power-cycles so tud_suspend_cb can later fire
+            // and tud_remote_wakeup() can signal a wake when the controller returns.
+            if (!get_config().enable_wake) {
+                tud_disconnect();
+            }
 #endif
             gap_connectable_control(1);
             gap_discoverable_control(1);

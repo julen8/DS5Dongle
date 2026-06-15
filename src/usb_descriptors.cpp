@@ -127,6 +127,9 @@ tusb_desc_device_t desc_device =
 uint8_t const *tud_descriptor_device_cb(void) {
     desc_device.idProduct = ds_mode() ? 0x0CE6 : 0x0DF2;
     desc_device.iSerialNumber = get_config().disable_usb_sn ? 0x00 : 0x03;
+    // USB 2.1 (so the host requests the BOS / MS OS 2.0 selective-suspend opt-in)
+    // only when wake is enabled; plain USB 2.0 otherwise.
+    desc_device.bcdUSB = get_config().enable_wake ? 0x0210 : 0x0200;
     return reinterpret_cast<uint8_t const *>(&desc_device);
 }
 
@@ -463,6 +466,18 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     }else {
         descriptor_configuration[offset - 16] = 0x95;
     }
+
+    // Wake / Game Bar are runtime features. Advertise REMOTE_WAKEUP only when wake is
+    // on, and include the keyboard interface (the LAST descriptor block) only when wake
+    // OR the Game Bar shortcut is on. With both off this is byte-identical to the base.
+    const bool wake = get_config().enable_wake;
+    const bool kbd = wake || get_config().ps_shortcut_enabled;
+    descriptor_configuration[7] = wake ? 0xE0 : 0xC0; // bmAttributes (REMOTE_WAKEUP bit)
+    const uint16_t total = kbd ? CONFIG_DESC_LEN_TOTAL
+                               : (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_WAKE_KBD);
+    descriptor_configuration[2] = (uint8_t) (total & 0xFF);                  // wTotalLength lo
+    descriptor_configuration[3] = (uint8_t) (total >> 8);                    // wTotalLength hi
+    descriptor_configuration[4] = kbd ? ITF_NUM_TOTAL : (ITF_NUM_TOTAL - 1); // bNumInterfaces
     return descriptor_configuration;
 }
 
@@ -975,6 +990,9 @@ uint8_t const desc_bos[] = {
 };
 
 uint8_t const *tud_descriptor_bos_cb(void) {
+    // BOS carries the MS OS 2.0 selective-suspend opt-in, only meaningful for wake.
+    // When wake is off the device is USB 2.0 and the host won't ask -- guard anyway.
+    if (!get_config().enable_wake) return nullptr;
     return desc_bos;
 }
 
@@ -1019,6 +1037,7 @@ TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "MS OS 2.0 descript
 // platform capability, then issues this vendor request to fetch the
 // descriptor set itself.
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+    if (!get_config().enable_wake) return false;
     if (stage != CONTROL_STAGE_SETUP) return true;
     if (request->bmRequestType_bit.type != TUSB_REQ_TYPE_VENDOR) return false;
     if (request->bRequest == MS_OS_20_VENDOR_CODE && request->wIndex == 7) {
