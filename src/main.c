@@ -31,9 +31,7 @@ void __not_in_flash_func(interruptLoop)() {
 // Invoked when received GET_REPORT control request
 // Application must fill buffer report's content and return its length.
 // Return zero will cause the stack to STALL request
-uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
-    return getFeatureData(report_id, buffer, reqlen);
-}
+uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) { return getFeatureData(report_id, buffer, reqlen); }
 
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
     uint8_t const itf = tu_u16_low(p_request->wIndex);  // wInterface
@@ -41,7 +39,11 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
 
     if (itf == 1) {
         config.audioActive = (alt != 0);
-        LOGD("[AUDIO] Set interface Speaker to alternate setting %d", alt);
+        LOGI("[AUDIO] Set interface Speaker to alternate setting %d", alt);
+    }
+    if (itf == 2) {  // ITF_NUM_AUDIO_STREAMING_IN (microphone)
+        LOGI("[AUDIO] Set interface Microphone to alternate setting %d", alt);
+        config.micActive = (alt != 0);
     }
 
     return true;
@@ -85,7 +87,6 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         // DSE: Write Profile Block
         report_id == 0x60 || report_id == 0x62 || report_id == 0x61) {
         setFeatureData(report_id, buffer, bufsize);
-        return;
     }
 }
 

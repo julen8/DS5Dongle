@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "audio.h"
 #include "bluetoothPacket.h"
 #include "config.h"
 #include "crc32.h"
@@ -323,7 +324,18 @@ static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t 
 static void __not_in_flash_func(l2capPacketHandler)(const uint8_t packet_type, const uint16_t channel, uint8_t* packet, const uint16_t size) {
     if (packet_type == L2CAP_DATA_PACKET) {
         if (channel == hidInterruptCid) {
-            if (size - 3 >= ds5StatePacketSize && packet[1] == 0x31) {
+            if (size > 4 && packet[1] == 0x31) {
+                // Mic audio: controller signals mic payload via bit1 of packet[2];
+                // the opus-encoded mic frame starts at packet+4.
+                if ((packet[2] >> 1) & 1) {
+                    mic_add_queue(packet + 4, size - 4);
+                    return;
+                }
+
+                // state packet
+                if (size - 3 < ds5StatePacketSize) {
+                    return;
+                }
                 union Ds5StateUnion* ds5StateUnion = (union Ds5StateUnion*)(packet + 3);
                 setStatePacket(ds5StateUnion);
 

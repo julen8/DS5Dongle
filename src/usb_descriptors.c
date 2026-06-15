@@ -144,7 +144,10 @@ uint8_t descriptor_configuration[] = {
     0x01,  // bSourceID: 1
     0x01,  // bControlSize: 1 byte per control
     0x03,  // bmaControls[0]: Master – Mute, Volume
-    0x00, 0x00, 0x00, 0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
     0x00,  // bmaControls[1..4]: No per-channel controls
 
     // Output Terminal Descriptor (Terminal ID 3: Speaker ← from Unit 2)
@@ -234,7 +237,8 @@ uint8_t descriptor_configuration[] = {
     0x02,  // bSubframeSize: 2 bytes/sample
     0x10,  // bBitResolution: 16 bits
     0x01,  // bSamFreqType: 1 discrete frequency
-    0x80, 0xBB,
+    0x80,
+    0xBB,
     0x00,  // tSamFreq: 48000 Hz (0x00BB80)
 
     // Endpoint Descriptor (Audio OUT: EP1)
@@ -297,7 +301,8 @@ uint8_t descriptor_configuration[] = {
     0x02,  // bSubframeSize: 2
     0x10,  // bBitResolution: 16
     0x01,  // bSamFreqType: 1
-    0x80, 0xBB,
+    0x80,
+    0xBB,
     0x00,  // tSamFreq: 48000 Hz
 
     // Endpoint Descriptor (Audio IN: EP2)
@@ -339,9 +344,9 @@ uint8_t descriptor_configuration[] = {
     0x00,  // bCountryCode: Not localized
     0x01,  // bNumDescriptors: 1 report descriptor
     0x22,  // bDescriptorType: Report
-    0x31,
-    0x01,  // wDescriptorLength: 305 (0x0131) DS
-    // 0xA5, 0x01, // wDescriptorLength: 421 (0x01A5) DSE
+    0x21,
+    0x01,  // wDescriptorLength: 289 (0x0121) DS: sizeof(desc_hid_report_ds) → 289 字节 → 小端序写作 0x21, 0x01
+    // 0x95, 0x01, // wDescriptorLength: 405 (0x0195) DSE: sizeof(desc_hid_report_dse) → 405 字节 → 小端序写作 0x95, 0x01
 
     // Endpoint Descriptor (HID IN: EP4)
     0x07,  // bLength
@@ -382,10 +387,12 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     constexpr int offset = CONFIG_DESC_LEN_BASE;
     descriptor_configuration[offset - 1] = bInterval;
     descriptor_configuration[offset - 8] = bInterval;
+
+    // descriptor_configuration[offset - 16]  -> wDescriptorLength
     if (ds_mode()) {
-        descriptor_configuration[offset - 16] = 0x31;
+        descriptor_configuration[offset - 16] = 0x21;
     } else {
-        descriptor_configuration[offset - 16] = 0xA5;
+        descriptor_configuration[offset - 16] = 0x95;
     }
     return descriptor_configuration;
 }
@@ -536,10 +543,10 @@ uint8_t const desc_hid_report_ds[] = {
     0x09, 0x36,        //   Usage (0x36)
     0x95, 0x03,        //   Report Count (3)
     0xB1, 0x02,        //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
-    0x85, 0xF6, 0x09, 0x37, 0x95, 0x3F, 0xB1, 0x02, 0x85, 0xF7, 0x09, 0x38, 0x95, 0x3F, 0xB1, 0x02,
     0xC0,  // End Collection
-    // 305 bytes
+    // 289 bytes
 };
+static_assert(sizeof(desc_hid_report_ds) == 289);
 
 uint8_t const desc_hid_report_dse[] = {
     0x05, 0x01,        // Usage Page (Generic Desktop Ctrls)
@@ -741,10 +748,10 @@ uint8_t const desc_hid_report_dse[] = {
     0x85, 0x7B,        //   Report ID (123)
     0x09, 0x53,        //   Usage (0x53)
     0xB1, 0x02,        //   Feature (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
-    0x85, 0xF6, 0x09, 0x37, 0x95, 0x3F, 0xB1, 0x02, 0x85, 0xF7, 0x09, 0x38, 0x95, 0x3F, 0xB1, 0x02,
     0xC0,  // End Collection
-    // 421 bytes
+    // 405 bytes
 };
+static_assert(sizeof(desc_hid_report_dse) == 405);
 
 // Invoked when received GET HID REPORT DESCRIPTOR
 // Application return pointer to descriptor
@@ -791,7 +798,7 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
         case STRID_SERIAL:
             chr_count = board_usb_get_serial(_desc_str + 1, 32);
-            _desc_str[chr_count] = '2'; // refresh windows cache (bumped for 2-ch mic)
+            _desc_str[chr_count] = '2';  // refresh windows cache (bumped for 2-ch mic)
             break;
 
         default:

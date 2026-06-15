@@ -6,6 +6,8 @@ struct ConfigType {
     bool plugHeadset;           // plug headset
     bool isDse;                 // dse
     bool audioActive;           // audio active
+    bool micActive;             // mic active
+    bool disableMic;            // disable mic
     uint8_t inactiveTime;       // [10,60] min
     uint8_t pollingRateMode;    // 0: 250Hz, 1: 500Hz, 2: real-time
     uint8_t audioBufferLength;  // [16,128]
@@ -25,6 +27,8 @@ struct ConfigType {
         .plugHeadset = false,                      \
         .isDse = false,                            \
         .audioActive = false,                      \
+        .micActive = false,                        \
+        .disableMic = false,                       \
         .inactiveTime = 20,                        \
         .pollingRateMode = 2,                      \
         .audioBufferLength = 48,                   \

@@ -1,8 +1,8 @@
 #include "bluetoothPacket.h"
 
 #include <assert.h>
-#include <pico/util/queue.h>
 #include <pico/critical_section.h>
+#include <pico/util/queue.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
@@ -428,13 +428,14 @@ static inline int __not_in_flash_func(setHapticSetupSubPacket)(uint8_t* buffer) 
     buffer[0] = (0x11 | 1 << 7) & (~(1 << 6));
     buffer[1] = subPacketHapticSetupSize;
     // sub packet content
-    buffer[2] = 0b11111110;                       // AudioFlags: 启用全部音频路由
-    buffer[3] = 0;                                // 保留
-    buffer[4] = 0;                                // 保留
-    buffer[5] = 0;                                // 保留
-    buffer[6] = 0;                                // 保留
-    buffer[7] = config.audioBufferLength;         // 可能是缓存大小，影响延迟
-    buffer[8] = bluetoothPacket.packetCounter++;  // 帧计数器，单调递增
+
+    buffer[2] = (config.micActive && !config.disableMic) ? 0b11111111 : 0b11111110;  // AudioFlags: 启用全部音频路由
+    buffer[3] = 0;                                                                   // 保留
+    buffer[4] = 0;                                                                   // 保留
+    buffer[5] = 0;                                                                   // 保留
+    buffer[6] = 0;                                                                   // 保留
+    buffer[7] = config.audioBufferLength;                                            // 可能是缓存大小，影响延迟
+    buffer[8] = bluetoothPacket.packetCounter++;                                     // 帧计数器，单调递增
 
     static_assert(subPacketHeadSize + subPacketHapticSetupSize == 9, "haptic setup sub packet size should be 9");
     return subPacketHeadSize + subPacketHapticSetupSize;

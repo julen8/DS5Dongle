@@ -16,6 +16,7 @@
 #include "config.h"
 #include "lerp_resampler.h"
 #include "log.h"
+#include "pico/flash.h"
 
 #define USE_CIC_FOR_HAPTIC 1
 
@@ -44,6 +45,11 @@ constexpr int rawSamplingRate = 48000;              // 固定不能修改
 constexpr int hapticOutSampleRate = 3000;           // 震动重采样输出的采样率
 constexpr int audioResamplerOutToOpusInCount = 16;  // 需要把 audioResamplerOutputFrames 的数据累积到 audioResamplerOutToOpusInCount 个才进行一次 opus 编码
 constexpr int audioOpusInFrames = 480;              // opus编码每次输入的帧数，固定为480，不能修改
+constexpr int micChannels = 1;                      // 从ds5收到的麦克风数据的声道数量
+constexpr int micFrames = 480;                      // 一个mic包包含的数据帧数
+constexpr int micOpusSize = 71;                     // bytes per opus-encoded mic frame from the DualSense
+constexpr int micPcmElementSize = 2;
+constexpr int micOpusElementSize = 2;
 
 // 一个静音的opus编码后的包，通过传入静音的pcm编码后得到
 constexpr uint8_t muteOpusPackage[] = {
@@ -56,15 +62,31 @@ constexpr uint8_t muteOpusPackage[] = {
 static_assert(sizeof(muteOpusPackage) == subPacketAudioSize, "sizeof(muteOpusPackage) != subPacketAudioSize");
 
 struct AudioRawElement {
-    atomic_bool inuse;
     int16_t data[audioResamplerInputFrames * audioChannels];
+    atomic_bool inuse;
+};
+
+struct micOpuselement {
+    uint8_t data[micOpusSize];
+    atomic_bool inuse;
+};
+
+struct micPcmElement {
+    int16_t data[micFrames * micChannels];
+    uint16_t len;
+    atomic_bool inuse;
 };
 
 static struct {
     alignas(8) uint32_t audio_core1_stack[8192];
     OpusEncoder* encoder;
-    queue_t audioRawFifo;
+    OpusDecoder* decoder;
+    queue_t audioPcmFifo;
+    queue_t micOpusFifo;
+    queue_t micPcmFifo;
     struct AudioRawElement audioRawElementArray[audioRawElementSize];
+    struct micOpuselement micOpusElementArray[micOpusElementSize];
+    struct micPcmElement micPcmElementArray[micPcmElementSize];
     int8_t* hapticBuf;
     struct AudioRawElement* currentAudioRawElement;
     lerpRs audioResampler;
@@ -112,6 +134,34 @@ static inline struct AudioRawElement* __not_in_flash_func(getAudioRawElement)() 
 
 static inline void __not_in_flash_func(freeAudioRawElement)(struct AudioRawElement* audioRawElement) { atomic_store(&audioRawElement->inuse, false); }
 
+static inline struct micPcmElement* __not_in_flash_func(getMicPcmElement)() {
+    for (int i = 0; i < micPcmElementSize; ++i) {
+        // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
+        bool expected = false;
+        if (atomic_compare_exchange_strong(&audio.micPcmElementArray[i].inuse, &expected, true)) {
+            return &audio.micPcmElementArray[i];
+        }
+    }
+
+    return nullptr;
+}
+
+static inline void __not_in_flash_func(freeMicPcmElement)(struct micPcmElement* element) { atomic_store(&element->inuse, false); }
+
+static inline struct micOpuselement* __not_in_flash_func(getMicOpusElement)() {
+    for (int i = 0; i < micOpusElementSize; ++i) {
+        // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
+        bool expected = false;
+        if (atomic_compare_exchange_strong(&audio.micOpusElementArray[i].inuse, &expected, true)) {
+            return &audio.micOpusElementArray[i];
+        }
+    }
+
+    return nullptr;
+}
+
+static inline void __not_in_flash_func(freeMicOpusElement)(struct micOpuselement* element) { atomic_store(&element->inuse, false); }
+
 static inline void cleanRemainingData() {
     {
         struct AudioRawElement* audioRawElement = audio.currentAudioRawElement;
@@ -119,7 +169,7 @@ static inline void cleanRemainingData() {
             audioRawElement = getAudioRawElement();
         }
         if (audioRawElement != nullptr) {
-            if (!queue_try_add(&audio.audioRawFifo, &audioRawElement)) {
+            if (!queue_try_add(&audio.audioPcmFifo, &audioRawElement)) {
                 LOGW("audio_fifo add failed");
                 freeAudioRawElement(audioRawElement);
             }
@@ -143,6 +193,30 @@ static inline void cleanRemainingData() {
 }
 
 void __not_in_flash_func(audioLoop)() {
+    // Mic playback: drain decoded mic PCM into the USB IN endpoint
+    static struct micPcmElement* pcmElement = nullptr;
+    if (queue_try_remove(&audio.micPcmFifo, &pcmElement)) {
+        // The controller mic is mono, but the USB descriptor presents a 2-channel
+        // mic (matching the real DS5) so Windows doesn't conflict with its cached
+        // DS5 audio format. Duplicate each mono sample into L and R.
+        static int16_t mic_stereo[micFrames * 2];
+        const int mono_samples = pcmElement->len / 2;
+        for (int i = 0; i < mono_samples; i++) {
+            mic_stereo[2 * i] = pcmElement->data[i];
+            mic_stereo[2 * i + 1] = pcmElement->data[i];
+        }
+        freeMicPcmElement(pcmElement);
+        const uint16_t stereo_len = (uint16_t)(mono_samples * 2 * 2);
+        uint16_t written = tud_audio_write(mic_stereo, stereo_len);
+        if (written != stereo_len) {
+            // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
+            // interface (the common case -- most games never do) tud_audio_write
+            // short-writes every frame, so an unconditional log would flood
+            // core0's hot path with the newlib formatting chain.
+            LOGD("[Audio] Warning: USB mic FIFO wrote %u/%u bytes", written, stereo_len);
+        }
+    }
+
     if (tud_audio_available() == 0) {
         if (!config.audioActive) {
             // usb已经停止发送pcm数据了,但是这里需要把剩下的缓存的数据处理完
@@ -191,7 +265,7 @@ void __not_in_flash_func(audioLoop)() {
             if (audio.audioBufPos == audioResamplerInputFrames * audioChannels) {
                 audio.audioBufPos = 0;
 
-                if (!queue_try_add(&audio.audioRawFifo, &audio.currentAudioRawElement)) {
+                if (!queue_try_add(&audio.audioPcmFifo, &audio.currentAudioRawElement)) {
                     LOGW("audio_fifo add failed");
                     freeAudioRawElement(audio.currentAudioRawElement);
                 }
@@ -308,69 +382,145 @@ void __not_in_flash_func(audioLoop)() {
     }
 }
 
-void __not_in_flash_func(core1Entry)() {
-    uint8_t count = 0;
-    static int16_t opusInBuf[audioOpusInFrames * audioChannels];
-    int16_t* resampleOutBuf = opusInBuf;
+uint8_t count = 0;
+static int16_t opusInBuf[audioOpusInFrames * audioChannels];
+int16_t* resampleOutBuf = opusInBuf;
+
+static inline void __not_in_flash_func(speakerProc)() {
+    audio.audioWaitData = true;
     struct AudioRawElement* audioRawElement = nullptr;
+    if (!queue_try_remove(&audio.audioPcmFifo, (void*)&audioRawElement)) {
+        return;
+    }
 
-    for (;;) {
-        audio.audioWaitData = true;
-        queue_remove_blocking(&audio.audioRawFifo, (void*)&audioRawElement);
-        if (!config.audioActive) {
-            lerpRsReset(&audio.audioResampler);
-            freeAudioRawElement(audioRawElement);
-            audioRawElement = nullptr;
-            resampleOutBuf = opusInBuf;
-            count = 0;
-            continue;
-        }
-        audio.audioWaitData = false;
-
-        // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
-        const int outFrames = lerpRsProcess(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, resampleOutBuf, audioResamplerOutputFrames);
+    if (!config.audioActive) {
+        lerpRsReset(&audio.audioResampler);
         freeAudioRawElement(audioRawElement);
         audioRawElement = nullptr;
-        if (outFrames != audioResamplerOutputFrames) {
-            LOGE("ResampleOut failed, outFrames:%d", outFrames);
-        }
-        resampleOutBuf += audioResamplerOutputFrames * audioChannels;
-
-        if (++count < audioResamplerOutToOpusInCount) {
-            continue;
-        }
-
         resampleOutBuf = opusInBuf;
         count = 0;
+        return;
+    }
+    audio.audioWaitData = false;
 
-        uint8_t* audioOut = getBufferForSubPacket(subPacketTypeAudio);
-        if (audioOut == nullptr) {
-            LOGW("Opus get out buf err");
-            continue;
+    // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
+    const int outFrames = lerpRsProcess(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, resampleOutBuf, audioResamplerOutputFrames);
+    freeAudioRawElement(audioRawElement);
+    audioRawElement = nullptr;
+    if (outFrames != audioResamplerOutputFrames) {
+        LOGE("ResampleOut failed, outFrames:%d", outFrames);
+    }
+    resampleOutBuf += audioResamplerOutputFrames * audioChannels;
+
+    if (++count < audioResamplerOutToOpusInCount) {
+        return;
+    }
+
+    resampleOutBuf = opusInBuf;
+    count = 0;
+
+    uint8_t* audioOut = getBufferForSubPacket(subPacketTypeAudio);
+    if (audioOut == nullptr) {
+        LOGW("Opus get out buf err");
+        return;
+    }
+    const int encodedBytes = opus_encode(audio.encoder, opusInBuf, audioOpusInFrames, audioOut, subPacketAudioSize);
+    if (encodedBytes < 0) {
+        LOGE("opus_encode_float failed:%d", encodedBytes);
+        freeSubPacket(audioOut, subPacketTypeAudio);
+        return;
+    }
+    if (config.audioActive) {
+        if (encodedBytes < subPacketAudioSize) {
+            memset(audioOut + encodedBytes, 0, subPacketAudioSize - encodedBytes);
         }
-        const int encodedBytes = opus_encode(audio.encoder, opusInBuf, audioOpusInFrames, audioOut, subPacketAudioSize);
-        if (encodedBytes < 0) {
-            LOGE("opus_encode_float failed:%d", encodedBytes);
-            freeSubPacket(audioOut, subPacketTypeAudio);
-            continue;
-        }
-        if (config.audioActive) {
-            if (encodedBytes < subPacketAudioSize) {
-                memset(audioOut + encodedBytes, 0, subPacketAudioSize - encodedBytes);
-            }
-            writeSubPacket(audioOut, subPacketTypeAudio);
-        } else {
-            freeSubPacket(audioOut, subPacketTypeAudio);
-        }
+        writeSubPacket(audioOut, subPacketTypeAudio);
+    } else {
+        freeSubPacket(audioOut, subPacketTypeAudio);
+    }
+}
+
+// Mic path: opus packets from the controller (core0 mic_fifo) -> opus decode ->
+// PCM into mic_decode_fifo for audio_loop to push to the USB IN endpoint.
+static void __not_in_flash_func(micProc)() {
+    struct micOpuselement* opusElement = nullptr;
+    if (!queue_try_remove(&audio.micOpusFifo, &opusElement)) {
+        return;
+    }
+    static int16_t decoded_data[micFrames * micChannels];
+    auto decoded_samples = opus_decode(audio.decoder, opusElement->data, micOpusSize, decoded_data, micFrames, false);
+    freeMicOpusElement(opusElement);
+    if (decoded_samples <= 0) {
+        // Gated behind ENABLE_VERBOSE: printf pulls the newlib formatting chain
+        // (flash) onto core1's path. Release builds compile it out so core1's
+        // audio loop stays fully RAM-resident (no XIP fetches on this core).
+        LOGD("[Audio] OpusDecoder decode failed: %d", decoded_samples);
+        return;
+    }
+
+    struct micPcmElement* pcmElement = getMicPcmElement();
+    if (pcmElement == nullptr) {
+        LOGE();
+        return;
+    }
+    pcmElement->len = decoded_samples * micChannels * sizeof(int16_t);
+    // todo 判断 len 是否超出
+    memcpy(pcmElement->data, decoded_data, pcmElement->len);
+    if (!queue_try_add(&audio.micPcmFifo, &pcmElement)) {
+        freeMicPcmElement(pcmElement);
+    }
+}
+
+void __not_in_flash_func(core1Entry)() {
+    // Register core1 as a flash-safe victim so core0's flash_safe_execute()
+    // (config_save) actually parks this core while flash is erased/programmed,
+    // instead of letting it fault on XIP. Requires PICO_FLASH_ASSUME_CORE1_SAFE=0.
+    flash_safe_execute_core_init();
+
+    for (;;) {
+        speakerProc();
+        micProc();
+    }
+}
+
+// data points at the opus mic payload, len is the bytes available there.
+// In RAM (consistent with the BT-receive path) and validates len so a short
+// or malformed report can't over-read past the packet buffer.
+void __not_in_flash_func(mic_add_queue)(uint8_t* data, uint16_t len) {
+    if (len < micOpusSize) return;
+    struct micOpuselement* opusElement = getMicOpusElement();
+    if (opusElement == nullptr) {
+        LOGE();
+        return;
+    }
+
+    memcpy(opusElement->data, data, micOpusSize);
+
+    if (!queue_try_add(&audio.micOpusFifo, &opusElement)) {
+        freeMicOpusElement(opusElement);
     }
 }
 
 void audioInit() {
     lerpRsInit(&audio.audioResampler, 51200, 48000, audioChannels);
 
+    // Mic queues are read from audio_loop on core0 every iteration, so they
+    // must exist regardless of the speaker-proc build flag.
+    queue_init(&audio.micOpusFifo, sizeof(struct micOpuselement*), micOpusElementSize);
+    queue_init(&audio.micPcmFifo, sizeof(struct micPcmElement*), micPcmElementSize);
+
     for (int i = 0; i < audioRawElementSize; ++i) {
         atomic_init(&audio.audioRawElementArray[i].inuse, false);
     }
+
+    for (int i = 0; i < micOpusElementSize; ++i) {
+        atomic_init(&audio.micOpusElementArray[i].inuse, false);
+    }
+
+    for (int i = 0; i < micPcmElementSize; ++i) {
+        atomic_init(&audio.micPcmElementArray[i].inuse, false);
+    }
+
     audio.hapticBuf = nullptr;
     audio.currentAudioRawElement = nullptr;
     audio.rawPos = 0;
@@ -398,6 +548,11 @@ void audioInit() {
     // 禁用帧间预测：每帧独立可解码，蓝牙丢包不影响后续帧，轻微降低 CPU
     opus_encoder_ctl(audio.encoder, OPUS_SET_PREDICTION_DISABLED(1));
 
-    queue_init(&audio.audioRawFifo, sizeof(struct AudioRawElement*), audioRawElementSize);
+    audio.decoder = opus_decoder_create(48000, micChannels, &error);
+    if (error != 0) {
+        LOGE("[Audio] OpusDecoder create failed");
+    }
+
+    queue_init(&audio.audioPcmFifo, sizeof(struct AudioRawElement*), audioRawElementSize);
     multicore_launch_core1_with_stack(core1Entry, audio.audio_core1_stack, sizeof(audio.audio_core1_stack));
 }
