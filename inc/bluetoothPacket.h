@@ -16,6 +16,7 @@ enum subPacketType : uint8_t {
     subPacketTypeAudio,
 };
 
+void needSendAudioSetup();
 void bluetoothPacketInit();
 
 uint8_t* getBufferForSubPacket(enum subPacketType type);

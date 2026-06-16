@@ -9,6 +9,7 @@
 #include <pico/multicore.h>
 #include <pico/util/queue.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <tusb.h>
 
 #include "bluetoothPacket.h"
@@ -51,29 +52,19 @@ constexpr int micOpusSize = 71;                     // bytes per opus-encoded mi
 constexpr int micPcmElementSize = 2;
 constexpr int micOpusElementSize = 2;
 
-// 一个静音的opus编码后的包，通过传入静音的pcm编码后得到
-constexpr uint8_t muteOpusPackage[] = {
-    0xF4, 0xFF, 0xFE, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
-    00,   00,   00,   00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
-    00,   00,   00,   00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
-    00,   00,   00,   00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
-    00,   00,   00,   00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00,
-};
-static_assert(sizeof(muteOpusPackage) == subPacketAudioSize, "sizeof(muteOpusPackage) != subPacketAudioSize");
-
 struct AudioRawElement {
     int16_t data[audioResamplerInputFrames * audioChannels];
     atomic_bool inuse;
 };
 
-struct micOpuselement {
+struct MicOpuselement {
     uint8_t data[micOpusSize];
     atomic_bool inuse;
 };
 
-struct micPcmElement {
+struct MicPcmElement {
     int16_t data[micFrames * micChannels];
-    uint16_t len;
+    int frames;
     atomic_bool inuse;
 };
 
@@ -85,8 +76,8 @@ static struct {
     queue_t micOpusFifo;
     queue_t micPcmFifo;
     struct AudioRawElement audioRawElementArray[audioRawElementSize];
-    struct micOpuselement micOpusElementArray[micOpusElementSize];
-    struct micPcmElement micPcmElementArray[micPcmElementSize];
+    struct MicOpuselement micOpusElementArray[micOpusElementSize];
+    struct MicPcmElement micPcmElementArray[micPcmElementSize];
     int8_t* hapticBuf;
     struct AudioRawElement* currentAudioRawElement;
     lerpRs audioResampler;
@@ -120,6 +111,13 @@ inline void resetHapticCicState(struct HapticCicState* state) {
 static struct HapticCicState hapticCic;
 #endif
 
+static inline void setMuteOpusPackage(uint8_t* opusPacket) {
+    opusPacket[0] = 0xF4;  // TOC byte: 48kHz, 2 channels, 10ms frames, CBR, no VBR header
+    opusPacket[1] = 0xFF;
+    opusPacket[2] = 0xFE;
+    memset(opusPacket + 3, 0, subPacketAudioSize - 3);
+}
+
 static inline struct AudioRawElement* __not_in_flash_func(getAudioRawElement)() {
     for (int i = 0; i < audioRawElementSize; ++i) {
         // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
@@ -134,7 +132,7 @@ static inline struct AudioRawElement* __not_in_flash_func(getAudioRawElement)() 
 
 static inline void __not_in_flash_func(freeAudioRawElement)(struct AudioRawElement* audioRawElement) { atomic_store(&audioRawElement->inuse, false); }
 
-static inline struct micPcmElement* __not_in_flash_func(getMicPcmElement)() {
+static inline struct MicPcmElement* __not_in_flash_func(getMicPcmElement)() {
     for (int i = 0; i < micPcmElementSize; ++i) {
         // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
         bool expected = false;
@@ -146,9 +144,9 @@ static inline struct micPcmElement* __not_in_flash_func(getMicPcmElement)() {
     return nullptr;
 }
 
-static inline void __not_in_flash_func(freeMicPcmElement)(struct micPcmElement* element) { atomic_store(&element->inuse, false); }
+static inline void __not_in_flash_func(freeMicPcmElement)(struct MicPcmElement* element) { atomic_store(&element->inuse, false); }
 
-static inline struct micOpuselement* __not_in_flash_func(getMicOpusElement)() {
+static inline struct MicOpuselement* __not_in_flash_func(getMicOpusElement)() {
     for (int i = 0; i < micOpusElementSize; ++i) {
         // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
         bool expected = false;
@@ -160,7 +158,7 @@ static inline struct micOpuselement* __not_in_flash_func(getMicOpusElement)() {
     return nullptr;
 }
 
-static inline void __not_in_flash_func(freeMicOpusElement)(struct micOpuselement* element) { atomic_store(&element->inuse, false); }
+static inline void __not_in_flash_func(freeMicOpusElement)(struct MicOpuselement* element) { atomic_store(&element->inuse, false); }
 
 static inline void cleanRemainingData() {
     {
@@ -194,26 +192,25 @@ static inline void cleanRemainingData() {
 
 void __not_in_flash_func(audioLoop)() {
     // Mic playback: drain decoded mic PCM into the USB IN endpoint
-    static struct micPcmElement* pcmElement = nullptr;
-    if (queue_try_remove(&audio.micPcmFifo, &pcmElement)) {
+    static struct MicPcmElement* pcmElement = nullptr;
+    if (queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
         // The controller mic is mono, but the USB descriptor presents a 2-channel
         // mic (matching the real DS5) so Windows doesn't conflict with its cached
         // DS5 audio format. Duplicate each mono sample into L and R.
-        static int16_t mic_stereo[micFrames * 2];
-        const int mono_samples = pcmElement->len / 2;
-        for (int i = 0; i < mono_samples; i++) {
-            mic_stereo[2 * i] = pcmElement->data[i];
-            mic_stereo[2 * i + 1] = pcmElement->data[i];
+        static int16_t micStereo[micFrames * 2];
+        for (int i = 0; i < pcmElement->frames; i++) {
+            micStereo[2 * i] = pcmElement->data[i];
+            micStereo[(2 * i) + 1] = pcmElement->data[i];
         }
         freeMicPcmElement(pcmElement);
-        const uint16_t stereo_len = (uint16_t)(mono_samples * 2 * 2);
-        uint16_t written = tud_audio_write(mic_stereo, stereo_len);
-        if (written != stereo_len) {
+        const uint16_t stereoLen = (uint16_t)(pcmElement->frames * 2 * sizeof(int16_t));
+        uint16_t written = tud_audio_write(micStereo, stereoLen);
+        if (written != stereoLen) {
             // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
             // interface (the common case -- most games never do) tud_audio_write
             // short-writes every frame, so an unconditional log would flood
             // core0's hot path with the newlib formatting chain.
-            LOGD("[Audio] Warning: USB mic FIFO wrote %u/%u bytes", written, stereo_len);
+            LOGE("[Audio] Warning: USB mic FIFO wrote %u/%u bytes", written, stereoLen);
         }
     }
 
@@ -368,7 +365,7 @@ void __not_in_flash_func(audioLoop)() {
                 audio.needSendFirstMuteOpusPackage = false;
                 uint8_t* audioBuff = getBufferForSubPacket(subPacketTypeAudio);
                 if (audioBuff != nullptr) {
-                    memcpy(audioBuff, muteOpusPackage, subPacketAudioSize);
+                    setMuteOpusPackage(audioBuff);
                     writeSubPacket(audioBuff, subPacketTypeAudio);
                 } else {
                     LOGW("getBufferForSubPacket failed");
@@ -443,31 +440,31 @@ static inline void __not_in_flash_func(speakerProc)() {
 // Mic path: opus packets from the controller (core0 mic_fifo) -> opus decode ->
 // PCM into mic_decode_fifo for audio_loop to push to the USB IN endpoint.
 static void __not_in_flash_func(micProc)() {
-    struct micOpuselement* opusElement = nullptr;
-    if (!queue_try_remove(&audio.micOpusFifo, &opusElement)) {
-        return;
-    }
-    static int16_t decoded_data[micFrames * micChannels];
-    auto decoded_samples = opus_decode(audio.decoder, opusElement->data, micOpusSize, decoded_data, micFrames, false);
-    freeMicOpusElement(opusElement);
-    if (decoded_samples <= 0) {
-        // Gated behind ENABLE_VERBOSE: printf pulls the newlib formatting chain
-        // (flash) onto core1's path. Release builds compile it out so core1's
-        // audio loop stays fully RAM-resident (no XIP fetches on this core).
-        LOGD("[Audio] OpusDecoder decode failed: %d", decoded_samples);
+    struct MicOpuselement* opusElement = nullptr;
+    if (!queue_try_remove(&audio.micOpusFifo, (void*)&opusElement)) {
         return;
     }
 
-    struct micPcmElement* pcmElement = getMicPcmElement();
+    struct MicPcmElement* pcmElement = getMicPcmElement();
     if (pcmElement == nullptr) {
-        LOGE();
+        LOGE("pcmElement is nullptr");
         return;
     }
-    pcmElement->len = decoded_samples * micChannels * sizeof(int16_t);
-    // todo 判断 len 是否超出
-    memcpy(pcmElement->data, decoded_data, pcmElement->len);
-    if (!queue_try_add(&audio.micPcmFifo, &pcmElement)) {
+
+    pcmElement->frames = opus_decode(audio.decoder, opusElement->data, micOpusSize, pcmElement->data, micFrames, false);
+    freeMicOpusElement(opusElement);
+    if (pcmElement->frames <= 0) {
+        // Gated behind ENABLE_VERBOSE: printf pulls the newlib formatting chain
+        // (flash) onto core1's path. Release builds compile it out so core1's
+        // audio loop stays fully RAM-resident (no XIP fetches on this core).
+        LOGE("[Audio] OpusDecoder decode failed: %d", pcmElement->frames);
         freeMicPcmElement(pcmElement);
+        return;
+    }
+
+    if (!queue_try_add(&audio.micPcmFifo, (void*)&pcmElement)) {
+        freeMicPcmElement(pcmElement);
+        LOGE("micPcmFifo: queue add failed");
     }
 }
 
@@ -486,18 +483,22 @@ void __not_in_flash_func(core1Entry)() {
 // data points at the opus mic payload, len is the bytes available there.
 // In RAM (consistent with the BT-receive path) and validates len so a short
 // or malformed report can't over-read past the packet buffer.
-void __not_in_flash_func(mic_add_queue)(uint8_t* data, uint16_t len) {
-    if (len < micOpusSize) return;
-    struct micOpuselement* opusElement = getMicOpusElement();
+void __not_in_flash_func(micAddOpusQueue)(uint8_t* data, uint16_t len) {
+    if (len < micOpusSize) {
+        return;
+    }
+
+    struct MicOpuselement* opusElement = getMicOpusElement();
     if (opusElement == nullptr) {
-        LOGE();
+        LOGE("no free micOpusElement");
         return;
     }
 
     memcpy(opusElement->data, data, micOpusSize);
 
-    if (!queue_try_add(&audio.micOpusFifo, &opusElement)) {
+    if (!queue_try_add(&audio.micOpusFifo, (void*)&opusElement)) {
         freeMicOpusElement(opusElement);
+        LOGE("micOpusFifo: queue add failed");
     }
 }
 
@@ -506,8 +507,8 @@ void audioInit() {
 
     // Mic queues are read from audio_loop on core0 every iteration, so they
     // must exist regardless of the speaker-proc build flag.
-    queue_init(&audio.micOpusFifo, sizeof(struct micOpuselement*), micOpusElementSize);
-    queue_init(&audio.micPcmFifo, sizeof(struct micPcmElement*), micPcmElementSize);
+    queue_init(&audio.micOpusFifo, sizeof(struct MicOpuselement*), micOpusElementSize);
+    queue_init(&audio.micPcmFifo, sizeof(struct MicPcmElement*), micPcmElementSize);
 
     for (int i = 0; i < audioRawElementSize; ++i) {
         atomic_init(&audio.audioRawElementArray[i].inuse, false);
@@ -532,7 +533,6 @@ void audioInit() {
 
     int error = 0;
     // RESTRICTED_LOWDELAY: 强制纯 CELT，跳过 SILK/Hybrid 模式决策和 look-ahead 分析
-    // 相比 AUDIO 模式降低 CPU 占用并减少编码延迟，且在此码率下 TOC 字节相同，不影响 muteOpusPackage
     audio.encoder = opus_encoder_create(48000, audioChannels, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &error);
     if (error != 0) {
         LOGE("OpusEncoder create failed");
@@ -543,9 +543,9 @@ void audioInit() {
     opus_encoder_ctl(audio.encoder, OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(audio.encoder, OPUS_SET_VBR(false));
     opus_encoder_ctl(audio.encoder, OPUS_SET_COMPLEXITY(0));  // 范围 0-10，0 最低复杂度
-    // 告知编码器输入精度为 int16（经 float 转换而来），避免按默认 24bit 精度处理
+    // 告知编码器输入精度为 int16
     opus_encoder_ctl(audio.encoder, OPUS_SET_LSB_DEPTH(16));
-    // 禁用帧间预测：每帧独立可解码，蓝牙丢包不影响后续帧，轻微降低 CPU
+    // 禁用帧间预测
     opus_encoder_ctl(audio.encoder, OPUS_SET_PREDICTION_DISABLED(1));
 
     audio.decoder = opus_decoder_create(48000, micChannels, &error);

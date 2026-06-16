@@ -43,7 +43,11 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
     }
     if (itf == 2) {  // ITF_NUM_AUDIO_STREAMING_IN (microphone)
         LOGI("[AUDIO] Set interface Microphone to alternate setting %d", alt);
-        config.micActive = (alt != 0);
+        bool active = (alt != 0);
+        if (config.micActive != active) {
+            config.micActive = active;
+            needSendAudioSetup();
+        }
     }
 
     return true;

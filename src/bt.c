@@ -327,8 +327,8 @@ static void __not_in_flash_func(l2capPacketHandler)(const uint8_t packet_type, c
             if (size > 4 && packet[1] == 0x31) {
                 // Mic audio: controller signals mic payload via bit1 of packet[2];
                 // the opus-encoded mic frame starts at packet+4.
-                if ((packet[2] >> 1) & 1) {
-                    mic_add_queue(packet + 4, size - 4);
+                if (0 != (packet[2] & (1 << 1))) {
+                    micAddOpusQueue(packet + 4, size - 4);
                     return;
                 }
 
