@@ -605,8 +605,8 @@ static void __not_in_flash_func(hci_packet_handler)(uint8_t packet_type, uint16_
             battery_led_on_disconnect();
 #endif
             printf("[HCI] Disconnected reason=0x%02X\n", reason);
-            gap_inquiry_start(30);
-            bt_inquiring = true;
+            // gap_inquiry_start(30);
+            // bt_inquiring = true;
             break;
         }
 
