@@ -8,6 +8,8 @@
 #include <bsp/board_api.h>
 #include <btstack_event.h>
 #include <classic/sdp_server.h>
+#include <hardware/timer.h>
+#include <hci_cmd.h>
 #include <l2cap.h>
 #include <pico/cyw43_arch.h>
 #include <pico/platform/compiler.h>
@@ -37,9 +39,8 @@ static uint16_t hidControlCid;
 static uint16_t hidInterruptCid;
 static bool checkDse = false;
 static bool theRequestHasBeenSent = false;
+static bool btInquiring = false;
 
-// 静态 Feature Report 缓存，替代 std::unordered_map + std::vector，消除堆分配
-// 每条最大存 64 字节（含首字节 reportId），16 个槽位覆盖全部 DS5 feature report
 constexpr uint8_t featureSlotCount = 16;
 constexpr uint8_t featureDataMax = 64;
 struct FeatureSlot {
@@ -124,6 +125,26 @@ int btInit() {
     return 0;
 }
 
+void btInquiringLed() {
+    if (hidInterruptCid != 0) {
+        return;
+    }
+    static bool ledStatus = false;
+    if (!btInquiring) {
+        if (ledStatus) {
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+        }
+        return;
+    }
+
+    static uint32_t lastTime = 0;
+    if (time_us_32() - lastTime > 200 * 1000) {
+        lastTime = time_us_32();
+        ledStatus = !ledStatus;
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, ledStatus);
+    }
+}
+
 static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t channel, uint8_t* packet, uint16_t size) {
     const uint8_t eventType = hci_event_packet_get_type(packet);
     switch (eventType) {
@@ -133,6 +154,7 @@ static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t 
             if (state == HCI_STATE_WORKING) {
                 LOGI("[BT] Stack ready, start inquiry");
                 gap_inquiry_start(30);
+                btInquiring = true;
             }
             break;
         }
@@ -166,6 +188,7 @@ static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t 
         case GAP_EVENT_INQUIRY_COMPLETE:
         case HCI_EVENT_INQUIRY_COMPLETE: {
             LOGI("[HCI] Inquiry complete.");
+            btInquiring = false;
             if (deviceFound) {
                 LOGI("[HCI] Connecting to %s...", bd_addr_to_str(currentDeviceAddr));
                 newPair = true;
@@ -173,8 +196,6 @@ static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t 
                 break;
             }
             if (eventType == HCI_EVENT_INQUIRY_COMPLETE) {
-                LOGI("[HCI] Restart inquiry");
-                gap_inquiry_start(30);
                 gap_connectable_control(1);
                 gap_discoverable_control(1);
             }
@@ -187,8 +208,10 @@ static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t 
             if (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION && status != ERROR_CODE_SUCCESS) {
                 deviceFound = false;
                 newPair = false;
-                LOGW("[HCI] Create connection rejected, restart inquiry");
-                // gap_inquiry_start(30);
+                LOGW("[HCI] Create connection rejected");
+            }
+            if (opcode == HCI_OPCODE_HCI_INQUIRY_CANCEL) {
+                btInquiring = false;
             }
             break;
         }
@@ -212,8 +235,7 @@ static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t 
             } else {
                 deviceFound = false;
                 newPair = false;
-                LOGW("[HCI] ACL connect failed status=0x%02X, restart inquiry", status);
-                // gap_inquiry_start(30);
+                LOGW("[HCI] ACL connect failed status=0x%02X", status);
             }
             break;
         }
@@ -260,7 +282,6 @@ static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t 
             if (status != ERROR_CODE_SUCCESS) {
                 LOGW("[HCI] Authentication failed, drop stored key for %s", bd_addr_to_str(currentDeviceAddr));
                 gap_drop_link_key_for_bd_addr(currentDeviceAddr);
-                // gap_inquiry_start(30);
             } else {
                 hci_send_cmd(&hci_set_connection_encryption, handle, 1);
             }
@@ -312,8 +333,7 @@ static void __not_in_flash_func(hciPacketHandler)(uint8_t packet_type, uint16_t 
                 featureData[i].valid = false;
             }  // 清空静态缓存
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
-            LOGI("[HCI] Disconnected reason=0x%02X, start inquiry", reason);
-            gap_inquiry_start(30);
+            LOGI("[HCI] Disconnected reason=0x%02X", reason);
             break;
         }
         default:
@@ -534,7 +554,6 @@ uint16_t getFeatureData(const uint8_t reportId, uint8_t* outBuf, const uint16_t 
 
 void setFeatureData(const uint8_t reportId, const uint8_t* data, const uint16_t len) {
     if (hidControlCid != 0) {
-        // 使用固定大小的静态缓冲替代主机长度可控的栈上 VLA，避免栈溢出
         static uint8_t getFeature[MTU_CONTROL];
         constexpr size_t featureCrcSize = 4;
         if (len < featureCrcSize) {

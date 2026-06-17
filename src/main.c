@@ -36,14 +36,13 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
     uint8_t const itf = tu_u16_low(p_request->wIndex);  // wInterface
     uint8_t const alt = tu_u16_low(p_request->wValue);  // bAlternateSetting
+    bool active = (alt != 0);
 
     if (itf == 1) {
-        config.audioActive = (alt != 0);
+        config.audioActive = active;
         LOGI("[AUDIO] Set interface Speaker to alternate setting %d", alt);
-    }
-    if (itf == 2) {  // ITF_NUM_AUDIO_STREAMING_IN (microphone)
+    } else if (itf == 2) {  // ITF_NUM_AUDIO_STREAMING_IN (microphone)
         LOGI("[AUDIO] Set interface Microphone to alternate setting %d", alt);
-        bool active = (alt != 0);
         if (config.micActive != active) {
             config.micActive = active;
             needSendAudioSetup();
@@ -143,5 +142,6 @@ int main() {
         tud_task();
         interruptLoop();
         audioLoop();
+        btInquiringLed();
     }
 }

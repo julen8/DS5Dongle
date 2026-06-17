@@ -18,15 +18,23 @@ foreach(_v OBJROOT OBJCOPY SUFFIX RENAMES)
 endforeach()
 
 # Locate the object: the unique file under OBJROOT whose path ends with SUFFIX.
-file(GLOB_RECURSE _objs "${OBJROOT}/*.o")
+# Match either .o (GCC default) or .obj (MinGW/Ninja on Windows) by normalising
+# the trailing extension on both the candidate path and SUFFIX before comparing.
+file(GLOB_RECURSE _objs "${OBJROOT}/*.o" "${OBJROOT}/*.obj")
+list(LENGTH _objs _obj_count)
+message(STATUS "================= processing '${SUFFIX}' =================")
+message(STATUS "searching ${_obj_count} objects under '${OBJROOT}'")
+string(REGEX REPLACE "\\.o(bj)?$" "" _sfx "${SUFFIX}")
+string(LENGTH "${_sfx}" _slen)
 set(_match "")
-string(LENGTH "${SUFFIX}" _slen)
+
 foreach(_o ${_objs})
-    string(LENGTH "${_o}" _olen)
+    string(REGEX REPLACE "\\.o(bj)?$" "" _ob "${_o}")
+    string(LENGTH "${_ob}" _olen)
     if(NOT _olen LESS _slen)
         math(EXPR _off "${_olen} - ${_slen}")
-        string(SUBSTRING "${_o}" ${_off} -1 _tail)
-        if(_tail STREQUAL "${SUFFIX}")
+        string(SUBSTRING "${_ob}" ${_off} -1 _tail)
+        if(_tail STREQUAL "${_sfx}")
             set(_match "${_o}")
             break()
         endif()
@@ -37,10 +45,13 @@ if(NOT _match)
     message(FATAL_ERROR "relocate_to_ram: no object matching '${SUFFIX}' under '${OBJROOT}'")
 endif()
 
+message(STATUS "matched object '${_match}'")
+
 # Build the objcopy argument list from the |-separated rename pairs.
 string(REPLACE "|" ";" _renames "${RENAMES}")
 set(_args "")
 foreach(_r ${_renames})
+    message(STATUS "rename section ${_r}")
     list(APPEND _args --rename-section "${_r}")
 endforeach()
 
@@ -50,3 +61,5 @@ execute_process(COMMAND "${OBJCOPY}" ${_args} "${_match}" RESULT_VARIABLE _rc)
 if(NOT _rc EQUAL 0)
     message(FATAL_ERROR "relocate_to_ram: objcopy failed (rc=${_rc}) on ${_match}")
 endif()
+
+message(STATUS "================= completed '${SUFFIX}' =================\n")
