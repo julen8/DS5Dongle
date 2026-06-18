@@ -30,6 +30,7 @@ add_executable(ds5-bridge
         src/crc32.c
         src/lerp_resampler.c
         src/state.c
+        src/haptic_resampler.c
 #        src/ram_mem.c
 )
 

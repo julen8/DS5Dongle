@@ -15,11 +15,10 @@
 #include "bluetoothPacket.h"
 #include "bt.h"
 #include "config.h"
+#include "haptic_resampler.h"
 #include "lerp_resampler.h"
 #include "log.h"
 #include "pico/flash.h"
-
-#define USE_CIC_FOR_HAPTIC 1
 
 /*
  *最终发送的 震动buf 和 音频buf 的大小分别 -> 64 , 200
@@ -81,6 +80,7 @@ static struct {
     int8_t* hapticBuf;
     struct AudioRawElement* currentAudioRawElement;
     lerpRs audioResampler;
+    lerp_rs_48to3_t hapticResampler;
     uint32_t rawPos;
     int hapticBufPos;
     int audioBufPos;
@@ -89,27 +89,6 @@ static struct {
     // audioWaitData 由 core1 写、core0 读，须加 volatile 确保跨核可见
     volatile bool audioWaitData;
 } audio = {};
-
-#if USE_CIC_FOR_HAPTIC
-// 3 阶 CIC，立体声，抽取因子 R=16，差分延迟 M=1
-struct HapticCicState {
-    // 3 级积分器（工作在高速率 48kHz）
-    int32_t i1L, i2L, i3L;
-    int32_t i1R, i2R, i3R;
-    // 3 级梳状延迟线（工作在低速率 3kHz）
-    int32_t c1L_z, c2L_z, c3L_z;
-    int32_t c1R_z, c2R_z, c3R_z;
-};
-
-inline void resetHapticCicState(struct HapticCicState* state) {
-    state->i1L = state->i2L = state->i3L = 0;
-    state->i1R = state->i2R = state->i3R = 0;
-    state->c1L_z = state->c2L_z = state->c3L_z = 0;
-    state->c1R_z = state->c2R_z = state->c3R_z = 0;
-}
-
-static struct HapticCicState hapticCic;
-#endif
 
 static inline void setMuteOpusPackage(uint8_t* opusPacket) {
     opusPacket[0] = 0xF4;  // TOC byte: 48kHz, 2 channels, 10ms frames, CBR, no VBR header
@@ -179,9 +158,7 @@ static inline void cleanRemainingData() {
         audio.rawPos = 0;
         audio.hapticBufPos = 0;
         audio.hapticBuf = nullptr;
-#if USE_CIC_FOR_HAPTIC
-        resetHapticCicState(&hapticCic);
-#endif
+        lerp_rs_48to3_reset(&audio.hapticResampler);
         audio.audioBufPos = 0;
         audio.currentAudioRawElement = nullptr;
     }
@@ -279,75 +256,18 @@ void __not_in_flash_func(audioLoop)() {
     constexpr int hapticDecimFactor = rawSamplingRate / hapticOutSampleRate;  // = 16
     constexpr int hapticOutFrames = readRawFrames / hapticDecimFactor;
 
+    int16_t hapticIn[readRawFrames * hapticChannels];
+    for (int i = 0; i < readRawFrames; i++) {
+        hapticIn[i * hapticChannels] = raw[i * inputChannels + 2];
+        hapticIn[i * hapticChannels + 1] = raw[i * inputChannels + 3];
+    }
+    int8_t hapticOut[hapticOutFrames * hapticChannels];
+    int ret = lerp_rs_48to3_process(&audio.hapticResampler, hapticIn, readRawFrames, hapticOut, hapticOutFrames);
+    if (ret != hapticOutFrames) {
+        LOGE("haptic resampler failed, ret:%d", ret);
+    }
+
     for (int i = 0; i < hapticOutFrames; i++) {
-#if USE_CIC_FOR_HAPTIC
-        // 3 阶 CIC 抽取
-        //  CIC 总增益 = R^N = 16^3 = 4096，对应 >>12
-        //  int16 → int8 再 >>8，合计右移 20 位
-        //  输出范围理论上 [-128, +128]，故需饱和到 int8
-        const int base = i * hapticDecimFactor;
-
-        // ── 高速率：16 次积分（纯加法，L/R 并行做提高 cache 命中率）──
-        for (int j = 0; j < hapticDecimFactor; j++) {
-            const int idx = (base + j) * inputChannels;
-            const int32_t xL = raw[idx + 2];
-            const int32_t xR = raw[idx + 3];
-
-            hapticCic.i1L += xL;
-            hapticCic.i2L += hapticCic.i1L;
-            hapticCic.i3L += hapticCic.i2L;
-            hapticCic.i1R += xR;
-            hapticCic.i2R += hapticCic.i1R;
-            hapticCic.i3R += hapticCic.i2R;
-        }
-
-        // ── 低速率：3 级梳状（纯减法）──
-        const int32_t c1L = hapticCic.i3L - hapticCic.c1L_z;
-        hapticCic.c1L_z = hapticCic.i3L;
-        const int32_t c2L = c1L - hapticCic.c2L_z;
-        hapticCic.c2L_z = c1L;
-        const int32_t c3L = c2L - hapticCic.c3L_z;
-        hapticCic.c3L_z = c2L;
-
-        const int32_t c1R = hapticCic.i3R - hapticCic.c1R_z;
-        hapticCic.c1R_z = hapticCic.i3R;
-        const int32_t c2R = c1R - hapticCic.c2R_z;
-        hapticCic.c2R_z = c1R;
-        const int32_t c3R = c2R - hapticCic.c3R_z;
-        hapticCic.c3R_z = c2R;
-
-        // ── 增益补偿 + 位深转换 + 饱和 ──
-        int32_t yL = c3L >> 20;
-        int32_t yR = c3R >> 20;
-        if (yL > 127) {
-            yL = 127;
-        } else if (yL < -128) {
-            yL = -128;
-        }
-        if (yR > 127) {
-            yR = 127;
-        } else if (yR < -128) {
-            yR = -128;
-        }
-
-        const int8_t outL = (int8_t)yL;
-        const int8_t outR = (int8_t)yR;
-#else
-        // 整数 box-filter 抽取 48kHz→3kHz（16:1）
-        // 每组 16 个 int16 样本累加 → 算术右移 12 位（>>4 平均 + >>8 缩放 int16→int8）
-        // 最大值：16×32767=524272，>>12=127，恰好适配 int8
-        int32_t sumL = 0;
-        int32_t sumR = 0;
-        const int base = i * hapticDecimFactor;
-        for (int j = 0; j < hapticDecimFactor; j++) {
-            sumL += raw[((base + j) * inputChannels) + 2];
-            sumR += raw[((base + j) * inputChannels) + 3];
-        }
-        // 16×max_int16=524272, >>12=127; 16×min_int16=-524288, >>12=-128 → 值域恰好 [-128,127]
-        const int8_t outL = (int8_t)(sumL >> 12);
-        const int8_t outR = (int8_t)(sumR >> 12);
-#endif
-
         if (audio.hapticBuf == nullptr) {
             audio.hapticBuf = (int8_t*)getBufferForSubPacket(subPacketTypeHaptic);
             if (audio.hapticBuf == nullptr) {
@@ -356,8 +276,8 @@ void __not_in_flash_func(audioLoop)() {
             }
         }
 
-        audio.hapticBuf[audio.hapticBufPos++] = outL;
-        audio.hapticBuf[audio.hapticBufPos++] = outR;
+        audio.hapticBuf[audio.hapticBufPos++] = hapticOut[i * hapticChannels];
+        audio.hapticBuf[audio.hapticBufPos++] = hapticOut[i * hapticChannels + 1];
 
         if (audio.hapticBufPos == subPacketHapticSize) {
             // 如果是第一次发送一个静音audio包，避免haptic包等待
@@ -504,6 +424,7 @@ void __not_in_flash_func(micAddOpusQueue)(uint8_t* data, uint16_t len) {
 
 void audioInit() {
     lerpRsInit(&audio.audioResampler, 51200, 48000, audioChannels);
+    lerp_rs_48to3_init(&audio.hapticResampler, 48000, hapticOutSampleRate);
 
     // Mic queues are read from audio_loop on core0 every iteration, so they
     // must exist regardless of the speaker-proc build flag.
