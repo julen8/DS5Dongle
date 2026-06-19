@@ -23,6 +23,7 @@ struct __attribute__((packed)) Config_body {
     uint8_t disable_mic; // bool: 0 enable (default), 1 disable controller mic
     uint8_t disable_speaker; // bool: 0 enable (default), 1 disable speaker/headset
     uint8_t enable_wake; // bool: 0 disabled (default), 1 wake host on PS press (USB remote wakeup)
+    uint8_t trigger_reduce; // [0,7] (0: auto)
 };
 
 struct __attribute__((packed)) Config {

@@ -41,6 +41,9 @@ static constexpr SetStateData state_init_data = {
     .HapticPowerSave = 1,
     .AudioPowerSave = 1,
 
+    // MotorPowerLevel
+    // .TriggerMotorPowerReduction = 7,
+
     // AudioControl2
     .SpeakerCompPreGain = 1,
     .BeamformingEnable = 0,
@@ -67,6 +70,9 @@ void state_init() {
     set_volume(get_config().speaker_volume, get_config().headset_volume);
     if (get_config().speaker_gain != 0) {
         set_gain(get_config().speaker_gain);
+    }
+    if (get_config().trigger_reduce != 0) {
+        state.TriggerMotorPowerReduction = get_config().trigger_reduce;
     }
 }
 
@@ -145,7 +151,11 @@ void state_update(const uint8_t *data, const uint8_t size) {
 
     if (update.AllowMotorPowerLevel) {
         state.RumbleMotorPowerReduction = update.RumbleMotorPowerReduction;
-        state.TriggerMotorPowerReduction = update.TriggerMotorPowerReduction;
+        if (get_config().trigger_reduce != 0) {
+            state.TriggerMotorPowerReduction = get_config().trigger_reduce;
+        }else {
+            state.TriggerMotorPowerReduction = update.TriggerMotorPowerReduction;
+        }
     }
 
     if (update.AllowAudioControl2) {
