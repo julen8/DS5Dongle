@@ -66,7 +66,7 @@ void config_valid() {
         body->speaker_gain = 2;
         printf("[Config] speaker_gain is invalid\n");
     }
-    if (body->inactive_time != 0 && (body->inactive_time < 5 || body->inactive_time > 60)) {
+    if (body->inactive_time < 0 || body->inactive_time > 60) {
         body->inactive_time = 30;
         printf("[Config] Inactive time is invalid\n");
     }
