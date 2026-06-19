@@ -75,7 +75,7 @@ void config_valid() {
         printf("[Config] disable_pico_led is invalid\n");
     }
     if (body->polling_rate_mode > 2) {
-        body->polling_rate_mode = 0;
+        body->polling_rate_mode = 1;
         printf("[Config] polling_rate_mode is invalid\n");
     }
     if (body->audio_buffer_length < 16 || body->audio_buffer_length > 128) {
