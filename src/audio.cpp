@@ -35,11 +35,11 @@
 #define MIC_CHANNELS      1
 #define MIC_FRAMES        480
 #define MIC_OPUS_SIZE     71   // bytes per opus-encoded mic frame from the DualSense
+#define HAPTICS_DECIMATION 16   // 48 kHz USB haptics channels -> 3 kHz BT haptics audio
 
 using std::clamp;
 using std::max;
 
-static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
 static bool plug_headset = false;
@@ -96,28 +96,34 @@ void update_mic_status() {
 }
 
 void __not_in_flash_func(audio_loop)() {
+    const Config_body &cfg = get_config();
+    const bool mic_enabled = mic_active && !cfg.disable_mic;
+    const bool speaker_enabled = !cfg.disable_speaker;
+
     // Mic playback: drain decoded mic PCM into the USB IN endpoint
     static mic_decode_element mic_pb{};
     if (queue_try_remove(&mic_decode_fifo, &mic_pb)) {
-        // The controller mic is mono, but the USB descriptor presents a 2-channel
-        // mic (matching the real DS5) so Windows doesn't conflict with its cached
-        // DS5 audio format. Duplicate each mono sample into L and R.
-        static int16_t mic_stereo[MIC_FRAMES * 2];
-        const int mono_samples = mic_pb.len / 2;
-        for (int i = 0; i < mono_samples; i++) {
-            mic_stereo[2 * i] = mic_pb.data[i];
-            mic_stereo[2 * i + 1] = mic_pb.data[i];
-        }
-        const uint16_t stereo_len = (uint16_t) (mono_samples * 2 * 2);
-        uint16_t written = tud_audio_write(mic_stereo, stereo_len);
-        if (written != stereo_len) {
-            // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
-            // interface (the common case -- most games never do) tud_audio_write
-            // short-writes every frame, so an unconditional log would flood
-            // core0's hot path with the newlib formatting chain.
+        if (mic_enabled) {
+            // The controller mic is mono, but the USB descriptor presents a 2-channel
+            // mic (matching the real DS5) so Windows doesn't conflict with its cached
+            // DS5 audio format. Pack each mono int16 sample as L/R in one 32-bit word.
+            static uint32_t mic_stereo[MIC_FRAMES];
+            const int mono_samples = mic_pb.len / 2;
+            for (int i = 0; i < mono_samples; i++) {
+                const uint16_t sample = static_cast<uint16_t>(mic_pb.data[i]);
+                mic_stereo[i] = static_cast<uint32_t>(sample) | (static_cast<uint32_t>(sample) << 16);
+            }
+            const uint16_t stereo_len = (uint16_t) (mono_samples * sizeof(uint32_t));
+            uint16_t written = tud_audio_write(mic_stereo, stereo_len);
+            if (written != stereo_len) {
+                // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
+                // interface (the common case -- most games never do) tud_audio_write
+                // short-writes every frame, so an unconditional log would flood
+                // core0's hot path with the newlib formatting chain.
 #if ENABLE_VERBOSE
-            printf("[Audio] Warning: USB mic FIFO wrote %u/%u bytes\n", written, stereo_len);
+                printf("[Audio] Warning: USB mic FIFO wrote %u/%u bytes\n", written, stereo_len);
 #endif
+            }
         }
     }
 
@@ -133,45 +139,50 @@ void __not_in_flash_func(audio_loop)() {
 
     static float audio_buf[512 * 2];
     static uint audio_buf_pos = 0;
-    // 2. 从4ch中提取ch3/ch4，转换为float输入重采样器
-    WDL_ResampleSample *in_buf;
-    int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
-
-    // const float audio_gain = mute[0] ? 0.0f : powf(10.0f, get_config().speaker_volume / 20.0f);
-    const float haptics_gain = get_config().haptics_gain;
-    for (int i = 0; i < nframes; i++) {
- #if !DISABLE_SPEAKER_PROC       
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f;
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f;
-        if (audio_buf_pos == 512 * 2) {
-            static audio_raw_element element{};
-            memcpy(element.data, audio_buf, 512 * 2 * 4);
-            if (queue_is_full(&audio_fifo)) {
-                queue_try_remove(&audio_fifo,NULL);
-            }
-            if (!queue_try_add(&audio_fifo, &element)) {
-                printf("[Audio] Warning: audio_fifo add failed\n");
-            }
-            audio_buf_pos = 0;
-        }
-#endif
-        in_buf[i * 2] = static_cast<WDL_ResampleSample>(clamp(raw[i * INPUT_CHANNELS + 2] / 32768.0f * haptics_gain,
-                                                              -1.0f, 1.0f));
-        in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(clamp(raw[i * INPUT_CHANNELS + 3] / 32768.0f * haptics_gain,
-                                                                  -1.0f, 1.0f));
-    }
-
-    // 3. 48kHz -> 3kHz 重采样
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32帧 × 2ch
-    const int out_frames = resampler.ResampleOut(out_buf, nframes, nframes / 4, OUTPUT_CHANNELS);
-
     static int8_t haptic_buf[SAMPLE_SIZE];
     static int haptic_buf_pos = 0;
+    static uint8_t haptic_phase = 0;
 
-    // 4. 转换为int8并缓冲，满64字节即组包发送
-    for (int i = 0; i < out_frames; i++) {
-        int val_l = static_cast<int>(out_buf[i * 2] * 127.0f);
-        int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
+    // const float audio_gain = mute[0] ? 0.0f : powf(10.0f, get_config().speaker_volume / 20.0f);
+    const float haptics_gain = cfg.haptics_gain;
+#if !DISABLE_SPEAKER_PROC
+    if (!speaker_enabled) {
+        audio_buf_pos = 0;
+        while (queue_try_remove(&audio_fifo, NULL)) {}
+    }
+#endif
+    for (int i = 0; i < frames; i++) {
+#if !DISABLE_SPEAKER_PROC
+        if (speaker_enabled) {
+            audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f;
+            audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f;
+            if (audio_buf_pos == 512 * 2) {
+                static audio_raw_element element{};
+                memcpy(element.data, audio_buf, 512 * 2 * 4);
+                if (queue_is_full(&audio_fifo)) {
+                    queue_try_remove(&audio_fifo, NULL);
+                }
+                if (!queue_try_add(&audio_fifo, &element)) {
+                    printf("[Audio] Warning: audio_fifo add failed\n");
+                }
+                audio_buf_pos = 0;
+            }
+        }
+#endif
+
+        // 48 kHz -> 3 kHz is an exact 16:1 ratio. The old WDL path used linear
+        // interpolation with no filter, so at integer phase this is equivalent
+        // to emitting every 16th source frame while doing far less RAM traffic.
+        const bool emit_haptic_sample = haptic_phase == 0;
+        if (++haptic_phase == HAPTICS_DECIMATION) haptic_phase = 0;
+        if (!emit_haptic_sample) {
+            continue;
+        }
+
+        int val_l = static_cast<int>(clamp(raw[i * INPUT_CHANNELS + 2] / 32768.0f * haptics_gain,
+                                           -1.0f, 1.0f) * 127.0f);
+        int val_r = static_cast<int>(clamp(raw[i * INPUT_CHANNELS + 3] / 32768.0f * haptics_gain,
+                                           -1.0f, 1.0f) * 127.0f);
         haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127); // 似乎clamp有点多余？还是以防万一吧
         haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
 
@@ -189,8 +200,8 @@ void __not_in_flash_func(audio_loop)() {
         // AND on the user not disabling the mic (config.disable_mic), so the
         // DualSense only streams mic audio -- and core1 only decodes it -- while
         // an app is recording. Other bits (speaker/haptics) stay enabled.
-        pkt[4] = (mic_active && !get_config().disable_mic) ? 0b11111111 : 0b11111110;
-        const auto buf_len = get_config().audio_buffer_length;
+        pkt[4] = mic_enabled ? 0b11111111 : 0b11111110;
+        const auto buf_len = cfg.audio_buffer_length;
         pkt[5] = buf_len;
         pkt[6] = buf_len;
         pkt[7] = buf_len;
@@ -209,7 +220,7 @@ void __not_in_flash_func(audio_loop)() {
         // Speaker Audio Data -- omitted entirely when the user disables the
         // speaker/headset (config.disable_speaker), so the controller's speaker
         // amp isn't driven (mirrors the Pico W no-speaker report).
-        if (!get_config().disable_speaker) {
+        if (speaker_enabled) {
             pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7; // Speaker: 0x13
             // L Headset Mono: 0x14
             // L Headset R Speaker: 0x15
@@ -227,10 +238,6 @@ void __not_in_flash_func(audio_loop)() {
 }
 
 void audio_init() {
-    resampler.SetMode(true, 0, false);
-    resampler.SetRates(48000, 3000);
-    resampler.SetFeedMode(true);
-    resampler.Prealloc(2, 24, 6);
     // Mic queues are read from audio_loop on core0 every iteration, so they
     // must exist regardless of the speaker-proc build flag.
     queue_init(&mic_fifo, sizeof(mic_element), 2);
@@ -254,6 +261,9 @@ static void __not_in_flash_func(speaker_proc)() {
     if (!queue_try_remove(&audio_fifo, &audio_element)) {
         return;
     }
+    if (get_config().disable_speaker) {
+        return;
+    }
     // 将 512 frames 重采样成 480 frames 以解决噪音问题。感谢 @Junhoo
     WDL_ResampleSample *in_buf;
     int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
@@ -264,9 +274,18 @@ static void __not_in_flash_func(speaker_proc)() {
     resampler_audio.ResampleOut(out_buf, nframes, 480, 2);
 
     static uint8_t out[200];
-    (void) opus_encode_float(encoder, out_buf, 480, out, 200);
+    const int encoded_len = opus_encode_float(encoder, out_buf, 480, out, sizeof(out));
+    if (encoded_len <= 0) {
+#if ENABLE_VERBOSE
+        printf("[Audio] OpusEncoder encode failed: %d\n", encoded_len);
+#endif
+        return;
+    }
     critical_section_enter_blocking(&opus_cs);
-    memcpy(opus_buf, out, 200);
+    memcpy(opus_buf, out, encoded_len);
+    if (encoded_len < (int) sizeof(opus_buf)) {
+        memset(opus_buf + encoded_len, 0, sizeof(opus_buf) - encoded_len);
+    }
     critical_section_exit(&opus_cs);
 }
 
@@ -277,8 +296,11 @@ static void __not_in_flash_func(mic_proc)() {
     if (!queue_try_remove(&mic_fifo, &mic_packet)) {
         return;
     }
-    static int16_t decoded_data[MIC_FRAMES * MIC_CHANNELS];
-    auto decoded_samples = opus_decode(decoder, mic_packet.data, MIC_OPUS_SIZE, decoded_data, MIC_FRAMES, false);
+    if (!mic_active || get_config().disable_mic) {
+        return;
+    }
+    static mic_decode_element decode_element{};
+    auto decoded_samples = opus_decode(decoder, mic_packet.data, MIC_OPUS_SIZE, decode_element.data, MIC_FRAMES, false);
     if (decoded_samples <= 0) {
         // Gated behind ENABLE_VERBOSE: printf pulls the newlib formatting chain
         // (flash) onto core1's path. Release builds compile it out so core1's
@@ -288,9 +310,7 @@ static void __not_in_flash_func(mic_proc)() {
 #endif
         return;
     }
-    static mic_decode_element decode_element{};
     decode_element.len = decoded_samples * MIC_CHANNELS * sizeof(int16_t);
-    memcpy(decode_element.data, decoded_data, decode_element.len);
     if (queue_is_full(&mic_decode_fifo)) {
         queue_try_remove(&mic_decode_fifo, NULL);
     }
@@ -305,7 +325,7 @@ void __not_in_flash_func(core1_entry)() {
     // core1. Requires PICO_FLASH_ASSUME_CORE1_SAFE=0.
     flash_safe_execute_core_init();
     int error = 0;
-    encoder = opus_encoder_create(48000, 2,OPUS_APPLICATION_AUDIO, &error);
+    encoder = opus_encoder_create(48000, 2,OPUS_APPLICATION_RESTRICTED_LOWDELAY, &error);
     if (error != 0) {
         printf("[Audio] OpusEncoder create failed\n");
         return;
@@ -333,6 +353,7 @@ void __not_in_flash_func(core1_entry)() {
 // In RAM (consistent with the BT-receive path) and validates len so a short
 // or malformed report can't over-read past the packet buffer.
 void __not_in_flash_func(mic_add_queue)(uint8_t *data, uint16_t len) {
+    if (!mic_active || get_config().disable_mic) return;
     if (len < MIC_OPUS_SIZE) return;
     static mic_element mic_packet{};
     memcpy(mic_packet.data, data, MIC_OPUS_SIZE);

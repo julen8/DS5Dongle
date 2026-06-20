@@ -825,7 +825,6 @@ void bt_control_send(const uint8_t *data, uint16_t len) {
 void __not_in_flash_func(bt_write)(const uint8_t *data, const uint16_t len) {
     if (hid_interrupt_cid == 0) return;
     static send_element packet{};
-    memset(packet.data, 0, 512);
     packet.len = len + 1;
     packet.data[0] = 0xA2;
     memcpy(packet.data + 1, data, len);
