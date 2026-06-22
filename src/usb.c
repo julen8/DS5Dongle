@@ -5,7 +5,9 @@
 #include <bsp/board_api.h>
 #include <tusb.h>
 
+#include "bt.h"
 #include "config.h"
+#include "log.h"
 
 #define UAC1_ENTITY_SPK_FEATURE_UNIT 0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT 0x05
@@ -172,3 +174,8 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p_request, uint8_t *buf) { return audio10_set_req_entity(p_request, buf); }
 
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {}
+
+void tud_suspend_cb(bool remote_wakeup_en) {
+    LOGI("[USB PM] invoke tud_suspend_cb");
+    btPowerOffController();
+}

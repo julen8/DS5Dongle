@@ -11,7 +11,7 @@
 #include "config.h"
 #include "crc32.h"
 #include "log.h"
-
+#include "state.h"
 /*
 一个蓝牙包结构:
 //BT PACKET:
@@ -68,7 +68,7 @@ constexpr int subPacketAudioSetupSize = 7;
 constexpr int ds5BluetoothPacketCrc32Size = 4;
 
 constexpr int subPacketBuffHapticCount = 2;
-constexpr int subPacketBuffControlCount = 2;
+constexpr int subPacketBuffControlCount = 3;
 constexpr int subPacketBuffAudioCount = 2;
 constexpr int bluetoothRawPacketCount = 3;
 
@@ -147,6 +147,7 @@ static struct {
     uint8_t reportSeqCounter;
     uint8_t packetCounter;
     bool needSendAudioSetup;
+    bool needSendControl;
 } bluetoothPacket = {};
 
 void needSendAudioSetup() {
@@ -270,6 +271,8 @@ void bluetoothPacketInit() {
 
     bluetoothPacket.reportSeqCounter = 0;
     bluetoothPacket.packetCounter = 0;
+    bluetoothPacket.needSendAudioSetup = false;
+    bluetoothPacket.needSendControl = false;
 
     queue_init(&bluetoothPacket.subPacketHapticQueue, sizeof(uint8_t*), subPacketBuffHapticCount);
     queue_init(&bluetoothPacket.subPacketControlQueue, sizeof(uint8_t*), subPacketBuffControlCount);
@@ -319,23 +322,28 @@ void __not_in_flash_func(freeSubPacket)(uint8_t* buffer, const enum subPacketTyp
 void __not_in_flash_func(writeSubPacket)(uint8_t* buffer, const enum subPacketType type) {
     switch (type) {
         case subPacketTypeControl: {
-            if (!queue_try_add(&bluetoothPacket.subPacketControlQueue, &buffer)) {
+            if (!queue_try_add(&bluetoothPacket.subPacketControlQueue, (void*)&buffer)) {
                 LOGW("subPacketControl add failed");
                 freeSubPacket(buffer, type);
+                return;
             }
+            const union Ds5ControlUnion* controlUnion = (union Ds5ControlUnion*)buffer;
+            bluetoothPacket.needSendControl = controlUnion->packet.UseRumbleNotHaptics != 0 || controlUnion->packet.UseRumbleNotHaptics2 != 0;
             break;
         }
         case subPacketTypeHaptic: {
-            if (!queue_try_add(&bluetoothPacket.subPacketHapticQueue, &buffer)) {
+            if (!queue_try_add(&bluetoothPacket.subPacketHapticQueue, (void*)&buffer)) {
                 LOGW("subPacketHaptic add failed");
                 freeSubPacket(buffer, type);
+                return;
             }
             break;
         }
         case subPacketTypeAudio: {
-            if (!queue_try_add(&bluetoothPacket.subPacketAudioQueue, &buffer)) {
+            if (!queue_try_add(&bluetoothPacket.subPacketAudioQueue, (void*)&buffer)) {
                 LOGW("subPacketAudio add failed");
                 freeSubPacket(buffer, type);
+                return;
             }
             break;
         }
@@ -400,6 +408,10 @@ static inline struct BluetoothRawPacket* __not_in_flash_func(newBluetoothRawPack
 }
 
 bool __not_in_flash_func(hasBluetoothRawPacketCanSend)() {
+    if (bluetoothPacket.needSendControl) {
+        return true;
+    }
+
     const uint hapticCount = queue_get_level(&bluetoothPacket.subPacketHapticQueue);
     const uint audioCount = queue_get_level(&bluetoothPacket.subPacketAudioQueue);
 
@@ -514,6 +526,9 @@ static inline void __not_in_flash_func(packed)(const uint8_t* controlData, uint8
     size_t offset = bluetoothRawPacketHeadSize + ds5BluetoothPacketHeadSize;
 
     if (controlData != nullptr) {
+        if (bluetoothPacket.needSendControl) {
+            bluetoothPacket.needSendControl = false;
+        }
         offset += setControlSubPacket(pkt->data + offset, controlData);
     }
 
@@ -598,7 +613,7 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
     }
 
     // audioActive时把controlData一起发送，防止发送频繁
-    if (config.audioActive && pktSize == 0) {
+    if (config.audioActive && pktSize == 0 && !bluetoothPacket.needSendControl) {
         // 没有hapticData 没有audioData
         return nullptr;
     }

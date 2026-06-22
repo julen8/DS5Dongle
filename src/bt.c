@@ -125,8 +125,6 @@ static inline void btL2capInit() {
 }
 
 int btInit() {
-    clearFeatureCache();
-
     btL2capInit();
 
     // SSP（安全简单配对）
@@ -135,6 +133,8 @@ int btInit() {
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_YES_NO);
     gap_ssp_set_authentication_requirement(SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING);
 
+    gap_set_page_scan_activity(0x0012, 0x0012);  // 11.25ms
+    gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);
     gap_connectable_control(1);
     gap_discoverable_control(1);
 
@@ -334,7 +334,6 @@ static inline void hciHandleDisconnectionComplete(uint8_t* packet) {
     bt.aclHandle = HCI_CON_HANDLE_INVALID;
     bt.hidControlCid = 0;
     bt.hidInterruptCid = 0;
-    clearFeatureCache();
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
     LOGI("[HCI] Disconnected reason=0x%02X", reason);
 }
@@ -669,11 +668,19 @@ void __not_in_flash_func(setFeatureData)(const uint8_t reportId, const uint8_t* 
     }
 }
 
+void btPowerOffController() {
+    uint8_t bluetoothControl[47] = {};
+    bluetoothControl[0] = 0x02;  // DualSense Bluetooth control: 1=on, 2=off.
+    setFeatureData(0x08, bluetoothControl, sizeof(bluetoothControl));
+}
+
 void initFeature() {
+    clearFeatureCache();
     getFeatureData(0x09, nullptr, 0);
     getFeatureData(0x20, nullptr, 0);
     getFeatureData(0x22, nullptr, 0);
     getFeatureData(0x05, nullptr, 0);
+    getFeatureData(0x81, nullptr, 0);
     // 当 0x70 report 响应到达时，checkDse 会在 l2capHandleControlDataPacket()
     // 中被消费：DS5 路径清为 false；DSE 路径会设置 config.isDse。
     bt.checkDse = true;

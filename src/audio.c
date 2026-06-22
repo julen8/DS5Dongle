@@ -6,6 +6,7 @@
 
 #include <assert.h>
 #include <opus.h>
+#include <pico/flash.h>
 #include <pico/multicore.h>
 #include <pico/util/queue.h>
 #include <stdatomic.h>
@@ -18,7 +19,6 @@
 #include "haptic_resampler.h"
 #include "lerp_resampler.h"
 #include "log.h"
-#include "pico/flash.h"
 
 /*
  *最终发送的 震动buf 和 音频buf 的大小分别 -> 64 , 200
@@ -224,8 +224,9 @@ void __not_in_flash_func(audioLoop)() {
     audio.rawPos = 0;
     audio.needClean = true;
 
-    // ── 1. 音频原始数据缓冲（送 core1 重采样 + Opus 编码）
+    static int16_t hapticIn[readRawFrames * hapticChannels];
     for (uint32_t i = 0; i < readRawFrames; i++) {
+        // ── 1. 音频原始数据缓冲（送 core1 重采样 + Opus 编码）
         if (audio.currentAudioRawElement == nullptr) {
             audio.currentAudioRawElement = getAudioRawElement();
             if (audio.currentAudioRawElement == nullptr) {
@@ -250,19 +251,18 @@ void __not_in_flash_func(audioLoop)() {
                 btRequestSend();
             }
         }
+
+        // 震动
+        hapticIn[i * hapticChannels] = raw[i * inputChannels + 2];
+        hapticIn[i * hapticChannels + 1] = raw[i * inputChannels + 3];
     }
 
     // ── 2. 震动：48kHz→3kHz（16:1）
     constexpr int hapticDecimFactor = rawSamplingRate / hapticOutSampleRate;  // = 16
     constexpr int hapticOutFrames = readRawFrames / hapticDecimFactor;
 
-    int16_t hapticIn[readRawFrames * hapticChannels];
-    for (int i = 0; i < readRawFrames; i++) {
-        hapticIn[i * hapticChannels] = raw[i * inputChannels + 2];
-        hapticIn[i * hapticChannels + 1] = raw[i * inputChannels + 3];
-    }
-    int8_t hapticOut[hapticOutFrames * hapticChannels];
-    int ret = lerp_rs_48to3_process(&audio.hapticResampler, hapticIn, readRawFrames, hapticOut, hapticOutFrames);
+    static int8_t hapticOut[hapticOutFrames * hapticChannels];
+    const int ret = lerp_rs_48to3_process(&audio.hapticResampler, hapticIn, readRawFrames, hapticOut, hapticOutFrames);
     if (ret != hapticOutFrames) {
         LOGE("haptic resampler failed, ret:%d", ret);
     }
