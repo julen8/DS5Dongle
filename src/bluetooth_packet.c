@@ -1,4 +1,4 @@
-#include "bluetoothPacket.h"
+#include "bluetooth_packet.h"
 
 #include <assert.h>
 #include <pico/critical_section.h>

@@ -13,7 +13,7 @@
 #include <stdio.h>
 
 #include "audio.h"
-#include "bluetoothPacket.h"
+#include "bluetooth_packet.h"
 #include "bt.h"
 #include "config.h"
 #include "crc32.h"
@@ -31,7 +31,9 @@ void __not_in_flash_func(interruptLoop)() {
 // Invoked when received GET_REPORT control request
 // Application must fill buffer report's content and return its length.
 // Return zero will cause the stack to STALL request
-uint16_t __not_in_flash_func(tud_hid_get_report_cb)(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) { return getFeatureData(report_id, buffer, reqlen); }
+uint16_t __not_in_flash_func(tud_hid_get_report_cb)(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
+    return getFeatureData(report_id, buffer, reqlen);
+}
 
 bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
     uint8_t const itf = tu_u16_low(p_request->wIndex);  // wInterface
@@ -68,16 +70,7 @@ void __not_in_flash_func(tud_hid_set_report_cb)(uint8_t itf, uint8_t report_id, 
                     break;
                 }
 
-                uint8_t *controlBuffer = getBufferForSubPacket(subPacketTypeControl);
-                if (controlBuffer != nullptr) {
-                    memcpy(controlBuffer, buffer + 1, size);
-                    if (subPacketControlSize > size) {
-                        memset(controlBuffer + size, 0, subPacketControlSize - size);  // zero padding
-                    }
-                    writeSubPacket(controlBuffer, subPacketTypeControl);
-                } else {
-                    LOGE("getBufferForSubPacket subPacketTypeControl");
-                }
+                setControlPacket(buffer + 1, size);
                 break;
             }
             default:

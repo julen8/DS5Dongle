@@ -26,12 +26,11 @@ add_executable(ds5-bridge
         src/audio.c
         src/bt.c
         src/config.c
-        src/bluetoothPacket.c
+        src/bluetooth_packet.c
         src/crc32.c
         src/lerp_resampler.c
         src/state.c
         src/haptic_resampler.c
-#        src/ram_mem.c
 )
 
 target_include_directories(ds5-bridge PRIVATE
@@ -142,19 +141,6 @@ relocate_to_ram(src/rp2_common/pico_cyw43_arch/cyw43_arch.c.o
 relocate_to_ram(lib/btstack/src/btstack_run_loop.c.o
         ".text.btstack_run_loop_base_poll_data_sources=.time_critical.btstack_run_loop_base_poll_data_sources|.text.btstack_run_loop_poll_data_sources_from_irq=.time_critical.btstack_run_loop_poll_data_sources_from_irq"
         "Phase B.4: btstack run-loop poll -> RAM")
-
-# Phase B.5: RAM-resident mem ops. core1's audio loop calls memcpy/memset every
-# frame (directly and inside libopus), and on RP2350 the Pico SDK uses newlib's
-# memcpy/memset, which live in flash -- so core1 still executes flash code during
-# steady-state audio. The pico/ROM mem-ops variant does not link on RP2350 (the
-# bootrom no longer exports ROM_FUNC_MEMCPY/MEMSET), so src/ram_mem.c provides
-# RAM-resident (.time_critical) overrides instead. Built with -fno-builtin and
-# -fno-tree-loop-distribute-patterns so the compiler does not turn the copy loops
-# back into calls to memcpy/memset (which would self-recurse). This completes the
-# move of core1's audio loop into RAM (no per-frame XIP fetches left on core1).
-# NOTE: re-validate audio at 150 MHz, since these replace newlib's mem ops.
-#set_source_files_properties(src/ram_mem.c PROPERTIES COMPILE_OPTIONS
-#        "-fno-builtin;-fno-tree-loop-distribute-patterns")
 
 target_compile_options(ds5-bridge PRIVATE -fsigned-char -Wall -O3 -Wdouble-promotion -mfloat-abi=softfp)
 target_compile_options(opus PRIVATE -O3 -mfloat-abi=softfp)

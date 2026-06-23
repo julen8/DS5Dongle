@@ -38,3 +38,5 @@ struct ConfigType {
     }
 
 extern struct ConfigType config;
+
+uint8_t getSpeakerVolume();

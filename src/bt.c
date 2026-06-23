@@ -18,7 +18,7 @@
 #include <string.h>
 
 #include "audio.h"
-#include "bluetoothPacket.h"
+#include "bluetooth_packet.h"
 #include "config.h"
 #include "crc32.h"
 #include "log.h"
@@ -505,29 +505,17 @@ static inline void __not_in_flash_func(l2capHandleChannelOpened)(uint8_t* packet
             LOGI("Init DualSense");
             initFeature();
             // 初始化手柄状态
-            uint8_t* controlBuffer = getBufferForSubPacket(subPacketTypeControl);
-            if (controlBuffer != nullptr) {
-                static_assert(subPacketControlSize == ds5ControlPacketSize, "subPacketControlSize != ds5ControlPacketSize");
-                memcpy(controlBuffer, ds5ControlInitPacket.data, subPacketControlSize);
-                writeSubPacket(controlBuffer, subPacketTypeControl);
-            } else {
-                LOGE("getBufferForSubPacket subPacketTypeControl");
-            }
+            setControlPacket(ds5ControlInitPacket.data, ds5ControlPacketSize);
 
             [[maybe_unused]] const uint16_t mtu = l2cap_get_remote_mtu_for_local_cid(bt.hidInterruptCid);
             LOGI("[L2CAP] Remote Interrupt MTU: %d", mtu);
 
             gap_connectable_control(0U);
             gap_discoverable_control(0U);
-            // tud_connect();
         } else {
             LOGE("[L2CAP] Unknown Channel psm: 0x%02X", psm);
         }
 
-        /*if (hid_control_cid != 0 && hid_interrupt_cid != 0) {
-            LOGI("[L2CAP] HID channels ready, request CAN_SEND_NOW for SET_PROTOCOL");
-            l2cap_request_can_send_now_event(hid_control_cid);
-        }*/
         return;
     }
 

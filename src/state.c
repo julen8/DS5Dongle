@@ -2,9 +2,12 @@
 
 #include <assert.h>
 #include <pico/critical_section.h>
+#include <pico/flash.h>
 #include <string.h>
 
+#include "bluetooth_packet.h"
 #include "config.h"
+#include "log.h"
 
 static_assert(sizeof(struct Ds5StatePacket) == ds5StatePacketSize, "sizeof(struct Ds5StatePacket) must be 63 bytes long");
 static_assert(sizeof(struct Ds5ControlPacket) == ds5ControlPacketSize, "sizeof(struct Ds5ControlPacket) must be 63 bytes long");
@@ -18,7 +21,9 @@ static union Ds5StateUnion statePacket = {
         },
 };
 
-void __not_in_flash_func(setStatePacket)(union Ds5StateUnion *packet) {
+static union Ds5ControlUnion controlPacket = ds5ControlInitPacket;
+
+void __not_in_flash_func(setStatePacket)(const union Ds5StateUnion *packet) {
     if (packet->packet.PluggedHeadphones != statePacket.packet.PluggedHeadphones) {
         config.plugHeadset = packet->packet.PluggedHeadphones != 0;
     }
@@ -27,3 +32,51 @@ void __not_in_flash_func(setStatePacket)(union Ds5StateUnion *packet) {
 }
 
 union Ds5StateUnion *__not_in_flash_func(getStatePacket)() { return &statePacket; }
+
+void __not_in_flash_func(setControlPacket)(const uint8_t *data, int size) {
+    if (size < ds5ControlPayloadSize) {
+        LOGE("setControlPacket size %d < %d", size, ds5ControlPayloadSize);
+        return;
+    }
+
+    static_assert(subPacketControlSize == ds5ControlPacketSize, "subPacketControlSize != ds5ControlPacketSize");
+
+    uint8_t *controlBuffer = getBufferForSubPacket(subPacketTypeControl);
+    if (controlBuffer == nullptr) {
+        LOGE("getBufferForSubPacket subPacketTypeControl");
+        return;
+    }
+
+    memcpy(controlBuffer, data, size);
+    if (subPacketControlSize > size) {
+        memset(controlBuffer + size, 0, subPacketControlSize - size);  // zero padding
+    }
+
+    writeSubPacket(controlBuffer, subPacketTypeControl);
+
+    memcpy(controlPacket.data, data, ds5ControlPayloadSize);
+}
+
+union Ds5ControlUnion *__not_in_flash_func(getControlPacket)() { return &controlPacket; }
+
+void __not_in_flash_func(reSendControlPacket)() {
+    uint8_t *controlBuffer = getBufferForSubPacket(subPacketTypeControl);
+    if (controlBuffer == nullptr) {
+        LOGE("getBufferForSubPacket subPacketTypeControl");
+        return;
+    }
+
+    memcpy(controlBuffer, controlPacket.data, ds5ControlPayloadSize);
+    static_assert(subPacketControlSize > ds5ControlPayloadSize);
+    memset(controlBuffer + ds5ControlPayloadSize, 0, subPacketControlSize - ds5ControlPayloadSize);  // zero padding
+
+    writeSubPacket(controlBuffer, subPacketTypeControl);
+}
+
+void __not_in_flash_func(updateVolume)() {
+    uint8_t value = getSpeakerVolume();
+    controlPacket.packet.VolumeHeadphones = value;
+    controlPacket.packet.VolumeSpeaker = value;
+
+    reSendControlPacket();
+}

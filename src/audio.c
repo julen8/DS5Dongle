@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <tusb.h>
 
-#include "bluetoothPacket.h"
+#include "bluetooth_packet.h"
 #include "bt.h"
 #include "config.h"
 #include "haptic_resampler.h"

@@ -8,6 +8,7 @@
 #include "bt.h"
 #include "config.h"
 #include "log.h"
+#include "state.h"
 
 #define UAC1_ENTITY_SPK_FEATURE_UNIT 0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT 0x05
@@ -44,6 +45,9 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                         TU_VERIFY(p_request->wLength == 1);
                         if (*mute != pBuff[0]) {
                             *mute = pBuff[0];
+                            if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
+                                updateVolume();
+                            }
                         }
                         TU_LOG2("    Set Mute: %d of entity: %u\r\n", config.mute[index], entityID);
                         return true;
@@ -60,6 +64,9 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
                         int16_t newVolume = *((int16_t const *)pBuff);
                         if (*volume != newVolume) {  // volume: [-25600, 0]
                             *volume = newVolume;
+                            if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
+                                updateVolume();
+                            }
                         }
                         TU_LOG2("    Set Volume: %d dB of entity: %u\r\n", config.volume[index], entityID);
                         return true;

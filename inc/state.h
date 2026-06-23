@@ -287,5 +287,11 @@ static constexpr union Ds5ControlUnion ds5ControlInitPacket = {
         },
 };
 
-void setStatePacket(union Ds5StateUnion *packet);
+void setStatePacket(const union Ds5StateUnion *packet);
 union Ds5StateUnion *getStatePacket();
+
+void setControlPacket(const uint8_t *data, int size);
+union Ds5ControlUnion *getControlPacket();
+void reSendControlPacket();
+
+void updateVolume();
