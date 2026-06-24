@@ -16,9 +16,8 @@
 #include "bluetooth_packet.h"
 #include "bt.h"
 #include "config.h"
-#include "haptic_resampler.h"
-#include "lerp_resampler.h"
 #include "log.h"
+#include "resampler.h"
 
 /*
  *最终发送的 震动buf 和 音频buf 的大小分别 -> 64 , 200
@@ -42,7 +41,10 @@ constexpr int audioResamplerOutputFrames = 30;      // 480 / audioResamplerOutTo
 constexpr int audioRawElementSize = 16;             // 音频原始数据缓冲buf数量
 constexpr int readRawFrames = 48;                   // 每次读取多少帧原始数据
 constexpr int rawSamplingRate = 48000;              // 固定不能修改
-constexpr int hapticOutSampleRate = 3000;           // 震动重采样输出的采样率
+constexpr int audioInSampleRate = 51200;            // 音频重采样输入的采样率
+constexpr int audioOutSampleRate = 48000;           // 音频重采样输出的采样率
+constexpr int hapticInSampleRate = 48000;           // 触觉反馈重采样输入的采样率
+constexpr int hapticOutSampleRate = 3000;           // 触觉反馈重采样输出的采样率
 constexpr int audioResamplerOutToOpusInCount = 16;  // 需要把 audioResamplerOutputFrames 的数据累积到 audioResamplerOutToOpusInCount 个才进行一次 opus 编码
 constexpr int audioOpusInFrames = 480;              // opus编码每次输入的帧数，固定为480，不能修改
 constexpr int micChannels = 1;                      // 从ds5收到的麦克风数据的声道数量
@@ -79,8 +81,8 @@ static struct {
     struct MicPcmElement micPcmElementArray[micPcmElementSize];
     int8_t* hapticBuf;
     struct AudioRawElement* currentAudioRawElement;
-    lerpRs audioResampler;
-    lerp_rs_48to3_t hapticResampler;
+    lerpResampler audioResampler;
+    lerpResampler hapticResampler;
     uint32_t rawPos;
     int hapticBufPos;
     int audioBufPos;
@@ -158,7 +160,7 @@ static inline void cleanRemainingData() {
         audio.rawPos = 0;
         audio.hapticBufPos = 0;
         audio.hapticBuf = nullptr;
-        lerp_rs_48to3_reset(&audio.hapticResampler);
+        lerpResamplerReset(&audio.hapticResampler);
         audio.audioBufPos = 0;
         audio.currentAudioRawElement = nullptr;
     }
@@ -262,7 +264,7 @@ void __not_in_flash_func(audioLoop)() {
     constexpr int hapticOutFrames = readRawFrames / hapticDecimFactor;
 
     static int8_t hapticOut[hapticOutFrames * hapticChannels];
-    const int ret = lerp_rs_48to3_process(&audio.hapticResampler, hapticIn, readRawFrames, hapticOut, hapticOutFrames);
+    const int ret = lerpResamplerProcessInt8Out(&audio.hapticResampler, hapticIn, readRawFrames, hapticOut, hapticOutFrames);
     if (ret != hapticOutFrames) {
         LOGE("haptic resampler failed, ret:%d", ret);
     }
@@ -311,7 +313,7 @@ static inline void __not_in_flash_func(speakerProc)() {
     }
 
     if (!config.audioActive) {
-        lerpRsReset(&audio.audioResampler);
+        lerpResamplerReset(&audio.audioResampler);
         freeAudioRawElement(audioRawElement);
         audioRawElement = nullptr;
         resampleOutBuf = opusInBuf;
@@ -321,7 +323,7 @@ static inline void __not_in_flash_func(speakerProc)() {
     audio.audioWaitData = false;
 
     // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
-    const int outFrames = lerpRsProcess(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, resampleOutBuf, audioResamplerOutputFrames);
+    const int outFrames = lerpResamplerProcessInt16Out(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, resampleOutBuf, audioResamplerOutputFrames);
     freeAudioRawElement(audioRawElement);
     audioRawElement = nullptr;
     if (outFrames != audioResamplerOutputFrames) {
@@ -423,8 +425,8 @@ void __not_in_flash_func(micAddOpusQueue)(uint8_t* data, uint16_t len) {
 }
 
 void audioInit() {
-    lerpRsInit(&audio.audioResampler, 51200, 48000, audioChannels);
-    lerp_rs_48to3_init(&audio.hapticResampler, 48000, hapticOutSampleRate);
+    lerpResamplerInit(&audio.audioResampler, audioInSampleRate, audioOutSampleRate);
+    lerpResamplerInit(&audio.hapticResampler, hapticInSampleRate, hapticOutSampleRate);
 
     // Mic queues are read from audio_loop on core0 every iteration, so they
     // must exist regardless of the speaker-proc build flag.

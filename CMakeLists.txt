@@ -28,9 +28,8 @@ add_executable(ds5-bridge
         src/config.c
         src/bluetooth_packet.c
         src/crc32.c
-        src/lerp_resampler.c
+        src/resampler.c
         src/state.c
-        src/haptic_resampler.c
 )
 
 target_include_directories(ds5-bridge PRIVATE
