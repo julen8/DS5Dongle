@@ -147,7 +147,6 @@ target_compile_options(opus PRIVATE -O3 -mfloat-abi=softfp)
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         PICO_FLASH_ASSUME_CORE1_SAFE=0
-        CYW43_PIO_CLOCK_DIV_INT=2
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")

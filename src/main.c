@@ -9,89 +9,16 @@
 #include <hardware/watchdog.h>
 #include <pico/critical_section.h>
 #include <pico/cyw43_arch.h>
-#include <stdint.h>
 #include <stdio.h>
 
 #include "audio.h"
 #include "bluetooth_packet.h"
 #include "bt.h"
-#include "config.h"
 #include "crc32.h"
 #include "log.h"
-#include "state.h"
-
-void __not_in_flash_func(interruptLoop)() {
-    if (tud_hid_ready()) {
-        if (!tud_hid_report(0x01, getStatePacket()->data, ds5StatePacketSize)) {
-            LOGE("[USBHID] tud_hid_report error");
-        }
-    }
-}
-
-// Invoked when received GET_REPORT control request
-// Application must fill buffer report's content and return its length.
-// Return zero will cause the stack to STALL request
-uint16_t __not_in_flash_func(tud_hid_get_report_cb)(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
-    return getFeatureData(report_id, buffer, reqlen);
-}
-
-bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
-    uint8_t const itf = tu_u16_low(p_request->wIndex);  // wInterface
-    uint8_t const alt = tu_u16_low(p_request->wValue);  // bAlternateSetting
-    bool active = (alt != 0);
-
-    if (itf == 1) {
-        config.audioActive = active;
-        LOGI("[AUDIO] Set interface Speaker to alternate setting %d", alt);
-    } else if (itf == 2) {  // ITF_NUM_AUDIO_STREAMING_IN (microphone)
-        LOGI("[AUDIO] Set interface Microphone to alternate setting %d", alt);
-        if (config.micActive != active) {
-            config.micActive = active;
-            needSendAudioSetup();
-        }
-    }
-
-    return true;
-}
-
-// Invoked when received SET_REPORT control request or
-// received data on OUT endpoint ( Report ID = 0, Type = 0 )
-void __not_in_flash_func(tud_hid_set_report_cb)(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
-    // INTERRUPT OUT
-    if (report_id == 0) {
-        if (bufsize < 1) {
-            return;
-        }
-        switch (buffer[0]) {
-            case 0x02: {
-                const int size = MIN(bufsize - 1, subPacketControlSize);
-                if (size < ds5ControlPayloadSize) {
-                    LOGE("Received control sub packet with size %d, expected %d", bufsize - 1, ds5ControlPayloadSize);
-                    break;
-                }
-
-                setControlPacket(buffer + 1, size);
-                break;
-            }
-            default:
-                LOGE("Unknown sub packet type:%02X", buffer[0]);
-                break;
-        }
-    }
-
-    if (report_id == 0x80 ||
-        // DSE: Write Profile Block
-        report_id == 0x60 || report_id == 0x62 || report_id == 0x61) {
-        setFeatureData(report_id, buffer, bufsize);
-    }
-}
+#include "usb.h"
 
 int main() {
-    // vreg_set_voltage(VREG_VOLTAGE_1_20);
-    // sleep_ms(1000);
-    // constexpr uint32_t sysClockKhz = 320000;
-    // set_sys_clock_khz(sysClockKhz, true);
-
     board_init();
     printf("\n\n===================\nBuild Time: " __DATE__ " " __TIME__ "\n===================\n\n");
     initCrc32();
@@ -123,7 +50,6 @@ int main() {
         LOGI("Clean boot");
     }
 
-    // Initialize the critical section for the report buffer
     bluetoothPacketInit();
     btInit();
     audioInit();
@@ -133,7 +59,7 @@ int main() {
         watchdog_update();
         cyw43_arch_poll();
         tud_task();
-        interruptLoop();
+        usbInterruptLoop();
         audioLoop();
         btInquiringLed();
     }
