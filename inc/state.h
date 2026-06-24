@@ -295,3 +295,4 @@ union Ds5ControlUnion *getControlPacket();
 void reSendControlPacket();
 
 void updateVolume();
+void updateMicVolume();

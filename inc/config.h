@@ -40,3 +40,4 @@ struct ConfigType {
 extern struct ConfigType config;
 
 uint8_t getSpeakerVolume();
+uint8_t getMicVolume();

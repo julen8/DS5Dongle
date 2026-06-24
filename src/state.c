@@ -75,8 +75,18 @@ void __not_in_flash_func(reSendControlPacket)() {
 
 void __not_in_flash_func(updateVolume)() {
     uint8_t value = getSpeakerVolume();
+    controlPacket.packet.AllowHeadphoneVolume = 1;
+    controlPacket.packet.AllowSpeakerVolume = 1;
     controlPacket.packet.VolumeHeadphones = value;
     controlPacket.packet.VolumeSpeaker = value;
+
+    reSendControlPacket();
+}
+
+void __not_in_flash_func(updateMicVolume)() {
+    uint8_t value = getMicVolume();
+    controlPacket.packet.AllowMicVolume = 1;
+    controlPacket.packet.VolumeMic = value;
 
     reSendControlPacket();
 }

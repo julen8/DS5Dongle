@@ -48,9 +48,11 @@ static bool audio10SetReqEntity(tusb_control_request_t const *p_request, const u
                             *mute = pBuff[0];
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                                 updateVolume();
+                            } else if (entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
+                                updateMicVolume();
                             }
                         }
-                        TU_LOG2("    Set Mute: %d of entity: %u\r\n", config.mute[index], entityID);
+                        TU_LOG2("    Set Mute: %d of entity: %u\r\n", *mute, entityID);
                         return true;
 
                     default:
@@ -67,9 +69,11 @@ static bool audio10SetReqEntity(tusb_control_request_t const *p_request, const u
                             *volume = newVolume;
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
                                 updateVolume();
+                            } else if (entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
+                                updateMicVolume();
                             }
                         }
-                        TU_LOG2("    Set Volume: %d dB of entity: %u\r\n", config.volume[index], entityID);
+                        TU_LOG2("    Set Volume: %d dB of entity: %u\r\n", *volume, entityID);
                         return true;
 
                     default:
