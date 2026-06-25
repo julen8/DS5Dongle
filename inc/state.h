@@ -279,11 +279,85 @@ union Ds5ControlUnion {
 };
 
 static constexpr union Ds5ControlUnion ds5ControlInitPacket = {
-    .data =
+    .packet =
         {
-            0xfd, 0xf7, 0x0, 0x0,  0x50, 0x50,  // Headphones, Speaker
-            0xff, 0x9,  0x0, 0x0F, 0x0,  0x0,  0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,  0x0,  0x0,  0x0,  0x0,
-            0x0,  0x0,  0x0, 0x0,  0x0,  0x0,  0x0, 0x0, 0x0, 0x0, 0xa, 0x7, 0x0, 0x0, 0x2, 0x1, 0x00, 0xff, 0xd7, 0x00,
+            .EnableRumbleEmulation = 1,
+            .UseRumbleNotHaptics = 0,
+            .AllowRightTriggerFFB = 1,
+            .AllowLeftTriggerFFB = 1,
+            .AllowHeadphoneVolume = 1,
+            .AllowSpeakerVolume = 1,
+            .AllowMicVolume = 1,
+            .AllowAudioControl = 1,
+
+            .AllowMuteLight = 1,
+            .AllowAudioMute = 1,
+            .AllowLedColor = 1,
+            .ResetLights = 0,
+            .AllowPlayerIndicators = 1,
+            .AllowHapticLowPassFilter = 1,
+            .AllowMotorPowerLevel = 1,
+            .AllowAudioControl2 = 1,
+
+            .RumbleEmulationRight = 0,
+            .RumbleEmulationLeft = 0,
+            .VolumeHeadphones = 0x50,
+            .VolumeSpeaker = 0x50,
+            .VolumeMic = 0x64,
+
+            .MicSelect = 0,
+            .EchoCancelEnable = 1,
+            .NoiseCancelEnable = 1,
+            .OutputPathSelect = 0,
+            .InputPathSelect = 0,
+
+            .MuteLightMode = MuteLightOff,
+
+            .TouchPowerSave = 1,
+            .MotionPowerSave = 1,
+            .HapticPowerSave = 1,
+            .AudioPowerSave = 1,
+            .MicMute = 0,
+            .SpeakerMute = 0,
+            .HeadphoneMute = 0,
+            .HapticMute = 0,
+
+            .RightTriggerFFB = {0},
+            .LeftTriggerFFB = {0},
+            .HostTimestamp = 0,
+
+            .RumbleMotorPowerReduction = 0,
+            .TriggerMotorPowerReduction = 0,
+
+            .SpeakerCompPreGain = 2,
+            .BeamformingEnable = 1,
+            .UnkAudioControl2 = 0,
+
+            .AllowLightBrightnessChange = 1,
+            .AllowColorLightFadeAnimation = 1,
+            .EnableImprovedRumbleEmulation = 1,
+            .UseRumbleNotHaptics2 = 0,
+            .UNKBITC = 0,
+
+            .HapticLowPassFilter = 0,
+            .UNKBIT = 0,
+
+            .UNKBYTE = 0,
+            .LightFadeAnimation = LightFadeAnimationFadeOut,
+            .LightBrightness = LightBrightnessMid,
+
+            .PlayerLight1 = 0,
+            .PlayerLight2 = 0,
+            .PlayerLight3 = 0,
+            .PlayerLight4 = 0,
+            .PlayerLight5 = 0,
+            .PlayerLightFade = 0,
+            .PlayerLightUNK = 0,
+
+            .LedRed = 0xff,
+            .LedGreen = 0xd7,
+            .LedBlue = 0,
+            .reserved = {0},
         },
 };
 

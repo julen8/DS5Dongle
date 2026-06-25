@@ -12,6 +12,7 @@ struct ConfigType {
     uint8_t pollingRateMode;    // 0: 250Hz, 1: 500Hz, 2: real-time
     uint8_t audioBufferLength;  // [16,128]
     uint8_t controllerMode;     // 0: DS5, 1: DSE, 2: Auto
+    float microphoneGain;
     struct {
         uint8_t speaker;
         uint8_t microphone;
@@ -33,6 +34,7 @@ struct ConfigType {
         .pollingRateMode = 2,                      \
         .audioBufferLength = 48,                   \
         .controllerMode = 2,                       \
+        .microphoneGain = 1.5F,                    \
         .mute = {.speaker = 0, .microphone = 0},   \
         .volume = {.speaker = 0, .microphone = 0}, \
     }

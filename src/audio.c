@@ -177,9 +177,20 @@ void __not_in_flash_func(audioLoop)() {
         // mic (matching the real DS5) so Windows doesn't conflict with its cached
         // DS5 audio format. Duplicate each mono sample into L and R.
         static int16_t micStereo[micFrames * 2];
+        float valFloat = 0.0F;
+        int16_t valInt16 = 0;
         for (int i = 0; i < pcmElement->frames; i++) {
-            micStereo[2 * i] = pcmElement->data[i];
-            micStereo[(2 * i) + 1] = pcmElement->data[i];
+            valFloat = config.microphoneGain * (float)pcmElement->data[i];
+            if (valFloat > 32767.0F) {
+                valInt16 = 32767;
+            } else if (valFloat < -32768.0F) {
+                valInt16 = -32768;
+            } else {
+                valInt16 = (int16_t)valFloat;
+            }
+
+            micStereo[2 * i] = valInt16;
+            micStereo[(2 * i) + 1] = valInt16;
         }
         freeMicPcmElement(pcmElement);
         const uint16_t stereoLen = (uint16_t)(pcmElement->frames * 2 * sizeof(int16_t));
