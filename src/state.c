@@ -47,10 +47,8 @@ void __not_in_flash_func(setControlPacket)(const uint8_t *data, int size) {
         return;
     }
 
-    memcpy(controlBuffer, data, size);
-    if (subPacketControlSize > size) {
-        memset(controlBuffer + size, 0, subPacketControlSize - size);  // zero padding
-    }
+    memcpy(controlBuffer, data, ds5ControlPayloadSize);
+    memset(controlBuffer + ds5ControlPayloadSize, 0, subPacketControlSize - ds5ControlPayloadSize);  // zero padding
 
     writeSubPacket(controlBuffer, subPacketTypeControl);
 

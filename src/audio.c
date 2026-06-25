@@ -192,8 +192,8 @@ void __not_in_flash_func(audioLoop)() {
             micStereo[2 * i] = valInt16;
             micStereo[(2 * i) + 1] = valInt16;
         }
-        freeMicPcmElement(pcmElement);
         const uint16_t stereoLen = (uint16_t)(pcmElement->frames * 2 * sizeof(int16_t));
+        freeMicPcmElement(pcmElement);
         uint16_t written = tud_audio_write(micStereo, stereoLen);
         if (written != stereoLen) {
             // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
@@ -380,6 +380,7 @@ static void __not_in_flash_func(micProc)() {
 
     struct MicPcmElement* pcmElement = getMicPcmElement();
     if (pcmElement == nullptr) {
+        freeMicOpusElement(opusElement);
         LOGE("pcmElement is nullptr");
         return;
     }

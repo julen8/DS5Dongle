@@ -5,7 +5,7 @@
 struct ConfigType {
     bool plugHeadset;           // plug headset
     bool isDse;                 // dse
-    bool audioActive;           // audio active
+    volatile bool audioActive;  // audio active
     bool micActive;             // mic active
     bool disableMic;            // disable mic
     uint8_t inactiveTime;       // [10,60] min
