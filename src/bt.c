@@ -412,7 +412,7 @@ static inline void __not_in_flash_func(l2capHandleInterruptDataPacket)(uint8_t* 
     setStatePacket(ds5StateUnion);
 
     // 静默检测
-    if (ds5StateUnion->packet.LeftStickX < 120 || ds5StateUnion->packet.LeftStickX > 140 || ds5StateUnion->packet.LeftStickY < 120 || ds5StateUnion->packet.LeftStickY > 140 ||
+    if (config.micActive || ds5StateUnion->packet.LeftStickX < 120 || ds5StateUnion->packet.LeftStickX > 140 || ds5StateUnion->packet.LeftStickY < 120 || ds5StateUnion->packet.LeftStickY > 140 ||
         ds5StateUnion->packet.RightStickX < 120 || ds5StateUnion->packet.RightStickX > 140 || ds5StateUnion->packet.RightStickY < 120 || ds5StateUnion->packet.RightStickY > 140 ||
         ds5StateUnion->packet.TriggerLeft > 0 || ds5StateUnion->packet.TriggerRight > 0 || ds5StateUnion->data[7] != DirectionNone || ds5StateUnion->data[8] != 0x00 ||
         ds5StateUnion->data[9] != 0x00) {
@@ -420,7 +420,6 @@ static inline void __not_in_flash_func(l2capHandleInterruptDataPacket)(uint8_t* 
     } else if (absolute_time_diff_us(bt.inactiveTime, get_absolute_time()) > (int64_t)(config.inactiveTime) * 60 * 1000 * 1000) {
         // config.inactiveTime 的单位是分钟；这里按微秒比较。
         LOGI("disconnect when inactive");
-        bt.inactiveTime = get_absolute_time();
         btDisconnect();
     }
 }

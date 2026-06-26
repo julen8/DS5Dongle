@@ -9,7 +9,7 @@ struct ConfigType {
     bool micActive;             // mic active
     bool disableMic;            // disable mic
     uint8_t inactiveTime;       // [10,60] min
-    uint8_t pollingRateMode;    // 0: 250Hz, 1: 500Hz, 2: real-time
+    uint8_t pollingRateMode;    // 0: 250Hz, 1: 500Hz, 2: 1000Hz
     uint8_t audioBufferLength;  // [16,128]
     uint8_t controllerMode;     // 0: DS5, 1: DSE, 2: Auto
     float microphoneGain;

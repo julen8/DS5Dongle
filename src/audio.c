@@ -70,27 +70,41 @@ struct MicPcmElement {
 };
 
 static struct {
-    alignas(8) uint32_t audio_core1_stack[8192];
-    OpusEncoder* encoder;
-    OpusDecoder* decoder;
-    queue_t audioPcmFifo;
-    queue_t micOpusFifo;
-    queue_t micPcmFifo;
+    alignas(8) uint32_t core1Stack[4096];
+    int16_t opusEncodeInputPcmBuffer[audioOpusInFrames * audioChannels];
     struct AudioRawElement audioRawElementArray[audioRawElementSize];
     struct MicOpuselement micOpusElementArray[micOpusElementSize];
     struct MicPcmElement micPcmElementArray[micPcmElementSize];
-    int8_t* hapticBuf;
-    struct AudioRawElement* currentAudioRawElement;
     lerpResampler audioResampler;
     lerpResampler hapticResampler;
+    queue_t audioPcmFifo;
+    queue_t micOpusFifo;
+    queue_t micPcmFifo;
+
+    OpusEncoder* encoder;
+    OpusDecoder* decoder;
+    int8_t* hapticBuf;
+    struct AudioRawElement* currentAudioRawElement;
     uint32_t rawPos;
     int hapticBufPos;
     int audioBufPos;
+    uint8_t opusEncodeInputChunkCount;
+    int16_t* opusEncodeInputWritePtr;
     bool needClean;
     bool needSendFirstMuteOpusPackage;
-    // audioWaitData 由 core1 写、core0 读，须加 volatile 确保跨核可见
-    volatile bool audioWaitData;
-} audio = {};
+} audio = {
+    .encoder = nullptr,
+    .decoder = nullptr,
+    .hapticBuf = nullptr,
+    .currentAudioRawElement = nullptr,
+    .rawPos = 0,
+    .hapticBufPos = 0,
+    .audioBufPos = 0,
+    .opusEncodeInputChunkCount = 0,
+    .opusEncodeInputWritePtr = audio.opusEncodeInputPcmBuffer,
+    .needClean = false,
+    .needSendFirstMuteOpusPackage = true,
+};
 
 static inline void setMuteOpusPackage(uint8_t* opusPacket) {
     opusPacket[0] = 0xF4;  // TOC byte: 48kHz, 2 channels, 10ms frames, CBR, no VBR header
@@ -312,12 +326,7 @@ void __not_in_flash_func(audioLoop)() {
     }
 }
 
-uint8_t count = 0;
-static int16_t opusInBuf[audioOpusInFrames * audioChannels];
-int16_t* resampleOutBuf = opusInBuf;
-
 static inline void __not_in_flash_func(speakerProc)() {
-    audio.audioWaitData = true;
     struct AudioRawElement* audioRawElement = nullptr;
     if (!queue_try_remove(&audio.audioPcmFifo, (void*)&audioRawElement)) {
         return;
@@ -327,34 +336,33 @@ static inline void __not_in_flash_func(speakerProc)() {
         lerpResamplerReset(&audio.audioResampler);
         freeAudioRawElement(audioRawElement);
         audioRawElement = nullptr;
-        resampleOutBuf = opusInBuf;
-        count = 0;
+        audio.opusEncodeInputWritePtr = audio.opusEncodeInputPcmBuffer;
+        audio.opusEncodeInputChunkCount = 0;
         return;
     }
-    audio.audioWaitData = false;
 
     // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
-    const int outFrames = lerpResamplerProcessInt16Out(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, resampleOutBuf, audioResamplerOutputFrames);
+    const int outFrames = lerpResamplerProcessInt16Out(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, audio.opusEncodeInputWritePtr, audioResamplerOutputFrames);
     freeAudioRawElement(audioRawElement);
     audioRawElement = nullptr;
     if (outFrames != audioResamplerOutputFrames) {
         LOGE("ResampleOut failed, outFrames:%d", outFrames);
     }
-    resampleOutBuf += audioResamplerOutputFrames * audioChannels;
+    audio.opusEncodeInputWritePtr += audioResamplerOutputFrames * audioChannels;
 
-    if (++count < audioResamplerOutToOpusInCount) {
+    if (++audio.opusEncodeInputChunkCount < audioResamplerOutToOpusInCount) {
         return;
     }
 
-    resampleOutBuf = opusInBuf;
-    count = 0;
+    audio.opusEncodeInputWritePtr = audio.opusEncodeInputPcmBuffer;
+    audio.opusEncodeInputChunkCount = 0;
 
     uint8_t* audioOut = getBufferForSubPacket(subPacketTypeAudio);
     if (audioOut == nullptr) {
         LOGW("Opus get out buf err");
         return;
     }
-    const int encodedBytes = opus_encode(audio.encoder, opusInBuf, audioOpusInFrames, audioOut, subPacketAudioSize);
+    const int encodedBytes = opus_encode(audio.encoder, audio.opusEncodeInputPcmBuffer, audioOpusInFrames, audioOut, subPacketAudioSize);
     if (encodedBytes < 0) {
         LOGE("opus_encode_float failed:%d", encodedBytes);
         freeSubPacket(audioOut, subPacketTypeAudio);
@@ -444,6 +452,7 @@ void audioInit() {
     // must exist regardless of the speaker-proc build flag.
     queue_init(&audio.micOpusFifo, sizeof(struct MicOpuselement*), micOpusElementSize);
     queue_init(&audio.micPcmFifo, sizeof(struct MicPcmElement*), micPcmElementSize);
+    queue_init(&audio.audioPcmFifo, sizeof(struct AudioRawElement*), audioRawElementSize);
 
     for (int i = 0; i < audioRawElementSize; ++i) {
         atomic_init(&audio.audioRawElementArray[i].inuse, false);
@@ -456,15 +465,6 @@ void audioInit() {
     for (int i = 0; i < micPcmElementSize; ++i) {
         atomic_init(&audio.micPcmElementArray[i].inuse, false);
     }
-
-    audio.hapticBuf = nullptr;
-    audio.currentAudioRawElement = nullptr;
-    audio.rawPos = 0;
-    audio.hapticBufPos = 0;
-    audio.audioBufPos = 0;
-    audio.needClean = false;
-    audio.needSendFirstMuteOpusPackage = true;
-    audio.audioWaitData = false;
 
     int error = 0;
     // RESTRICTED_LOWDELAY: 强制纯 CELT，跳过 SILK/Hybrid 模式决策和 look-ahead 分析
@@ -488,6 +488,5 @@ void audioInit() {
         LOGE("[Audio] OpusDecoder create failed");
     }
 
-    queue_init(&audio.audioPcmFifo, sizeof(struct AudioRawElement*), audioRawElementSize);
-    multicore_launch_core1_with_stack(core1Entry, audio.audio_core1_stack, sizeof(audio.audio_core1_stack));
+    multicore_launch_core1_with_stack(core1Entry, audio.core1Stack, sizeof(audio.core1Stack));
 }
