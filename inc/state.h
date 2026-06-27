@@ -305,7 +305,7 @@ static constexpr union Ds5ControlUnion ds5ControlInitPacket = {
             .VolumeSpeaker = 0x50,
             .VolumeMic = 0x64,
 
-            .MicSelect = 0,
+            .MicSelect = 2,
             .EchoCancelEnable = 1,
             .NoiseCancelEnable = 1,
             .OutputPathSelect = 0,
