@@ -18,9 +18,9 @@ struct ConfigType {
         uint8_t microphone;
     } mute;  // 0: SPEAKER(0x02) 1: MIC(0x05)
     struct {
-        int16_t speaker;
-        int16_t microphone;
-    } volume;  // volume: [-25600, 0] , windows音量设置来的
+        int16_t speaker;  // [-25600, 0] , windows音量设置来的
+        int16_t microphone; // [0, 12288]
+    } volume;
 };
 
 #define CONFIG_DEFAULTS                            \

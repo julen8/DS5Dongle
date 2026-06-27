@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static uint32_t crc32LookupTable[256] = {};
+static uint32_t  __not_in_flash("crc3_data")  crc32LookupTable[256] = {};
 
 inline uint32_t crc32TableEntry(uint32_t index) {
     for (unsigned bit = 0; bit < 8; ++bit) {

@@ -12,7 +12,7 @@
 static_assert(sizeof(struct Ds5StatePacket) == ds5StatePacketSize, "sizeof(struct Ds5StatePacket) must be 63 bytes long");
 static_assert(sizeof(struct Ds5ControlPacket) == ds5ControlPacketSize, "sizeof(struct Ds5ControlPacket) must be 63 bytes long");
 
-static union Ds5StateUnion statePacket = {
+static union Ds5StateUnion __not_in_flash("state_data") statePacket = {
     .data =
         {
             0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7, 0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41, 0x01, 0x00, 0x0e, 0x00, 0xef, 0xff,
@@ -73,18 +73,37 @@ void __not_in_flash_func(reSendControlPacket)() {
 
 void __not_in_flash_func(updateVolume)() {
     uint8_t value = getSpeakerVolume();
+
     controlPacket.packet.AllowHeadphoneVolume = 1;
     controlPacket.packet.AllowSpeakerVolume = 1;
     controlPacket.packet.VolumeHeadphones = value;
     controlPacket.packet.VolumeSpeaker = value;
+
+    controlPacket.packet.AllowAudioMute = 1;
+    controlPacket.packet.MicMute = 0;
+    controlPacket.packet.SpeakerMute = 0;
+    controlPacket.packet.HeadphoneMute = 0;
+    controlPacket.packet.HapticMute = 0;
 
     reSendControlPacket();
 }
 
 void __not_in_flash_func(updateMicVolume)() {
     uint8_t value = getMicVolume();
+
     controlPacket.packet.AllowMicVolume = 1;
     controlPacket.packet.VolumeMic = value;
+
+    controlPacket.packet.AllowAudioMute = 1;
+    controlPacket.packet.MicSelect = 0;
+    controlPacket.packet.EchoCancelEnable = 1;
+    controlPacket.packet.NoiseCancelEnable = 1;
+    controlPacket.packet.OutputPathSelect = 0;
+    controlPacket.packet.InputPathSelect = 0;
+    controlPacket.packet.MicMute = 0;
+    controlPacket.packet.SpeakerMute = 0;
+    controlPacket.packet.HeadphoneMute = 0;
+    controlPacket.packet.HapticMute = 0;
 
     reSendControlPacket();
 }

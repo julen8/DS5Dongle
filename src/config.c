@@ -3,7 +3,7 @@
 #include <math.h>
 #include <pico/flash.h>
 
-struct ConfigType config = CONFIG_DEFAULTS;
+struct ConfigType __not_in_flash("config_data") config = CONFIG_DEFAULTS;
 
 // return [0, 100]
 uint8_t __not_in_flash_func(getSpeakerVolume)() {
@@ -25,7 +25,7 @@ uint8_t __not_in_flash_func(getMicVolume)() {
 
     if (lastMicVolume != config.volume.microphone) {
         lastMicVolume = config.volume.microphone;
-        audioGain = powf(10.0F, ((float)config.volume.microphone) / 256.0F / 20.0F) * 100.0F;
+        audioGain = ((float)config.volume.microphone) / 12288.0F * 100.0F;
     }
 
     return (config.mute.microphone == 0) ? (uint8_t)audioGain : 0;

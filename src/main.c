@@ -2,12 +2,8 @@
 // Created by awalol on 2026/3/4.
 //
 
-#include <assert.h>
 #include <bsp/board_api.h>
-#include <hardware/clocks.h>
-#include <hardware/vreg.h>
 #include <hardware/watchdog.h>
-#include <pico/critical_section.h>
 #include <pico/cyw43_arch.h>
 #include <stdio.h>
 

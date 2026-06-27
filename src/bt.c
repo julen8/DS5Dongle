@@ -50,7 +50,7 @@ typedef struct {
     absolute_time_t inactiveTime;  // 手柄长时间静默
 } BtRuntime;
 
-static BtRuntime bt = {
+static BtRuntime __not_in_flash("bt_data") bt = {
     .aclHandle = HCI_CON_HANDLE_INVALID,
 };
 

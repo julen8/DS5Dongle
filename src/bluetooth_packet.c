@@ -67,9 +67,9 @@ constexpr int subPacketAudioSetupSize = 7;
 
 constexpr int ds5BluetoothPacketCrc32Size = 4;
 
-constexpr int subPacketBuffHapticCount = 2;
+constexpr int subPacketBuffHapticCount = 3;
 constexpr int subPacketBuffControlCount = 3;
-constexpr int subPacketBuffAudioCount = 2;
+constexpr int subPacketBuffAudioCount = 3;
 constexpr int bluetoothRawPacketCount = 3;
 
 #ifndef offsetof
@@ -134,7 +134,7 @@ struct BluetoothRawPacket {
     uint8_t data[bluetoothRawPacketDataSize0x39];
 };
 
-static struct {
+struct BluetoothPacketRuntime {
     struct SubPacketBufferHaptic subPacketBufferHaptic[subPacketBuffHapticCount];
     struct SubPacketBufferControl subPacketBufferControl[subPacketBuffControlCount];
     struct SubPacketBufferAudio subPacketBufferAudio[subPacketBuffAudioCount];
@@ -148,9 +148,11 @@ static struct {
     uint8_t packetCounter;
     bool needSendAudioSetup;
     bool needSendControl;
-} bluetoothPacket = {};
+};
 
-void needSendAudioSetup() {
+static struct BluetoothPacketRuntime __not_in_flash("bluetoothPacket_data") bluetoothPacket = {};
+
+void __not_in_flash_func(needSendAudioSetup)() {
     bluetoothPacket.needSendAudioSetup = true;
     if (!config.audioActive) {
         btRequestSend();

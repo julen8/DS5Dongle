@@ -38,7 +38,7 @@ constexpr int inputChannels = 4;                    // 固定不能修改
 constexpr int audioChannels = 2;                    // 固定不能修改
 constexpr int audioResamplerInputFrames = 32;       // 512 / audioResamplerOutToOpusInCount
 constexpr int audioResamplerOutputFrames = 30;      // 480 / audioResamplerOutToOpusInCount
-constexpr int audioRawElementSize = 16;             // 音频原始数据缓冲buf数量
+constexpr int audioRawElementSize = 32;             // 音频原始数据缓冲buf数量
 constexpr int readRawFrames = 48;                   // 每次读取多少帧原始数据
 constexpr int rawSamplingRate = 48000;              // 固定不能修改
 constexpr int audioInSampleRate = 51200;            // 音频重采样输入的采样率
@@ -50,8 +50,8 @@ constexpr int audioOpusInFrames = 480;              // opus编码每次输入的
 constexpr int micChannels = 1;                      // 从ds5收到的麦克风数据的声道数量
 constexpr int micFrames = 480;                      // 一个mic包包含的数据帧数
 constexpr int micOpusSize = 71;                     // bytes per opus-encoded mic frame from the DualSense
-constexpr int micPcmElementSize = 2;
-constexpr int micOpusElementSize = 2;
+constexpr int micPcmElementSize = 4;
+constexpr int micOpusElementSize = 4;
 
 struct AudioRawElement {
     int16_t data[audioResamplerInputFrames * audioChannels];
@@ -69,7 +69,7 @@ struct MicPcmElement {
     atomic_bool inuse;
 };
 
-static struct {
+struct AudioRuntime {
     alignas(8) uint32_t core1Stack[8192];
     int16_t opusEncodeInputPcmBuffer[audioOpusInFrames * audioChannels];
     struct AudioRawElement audioRawElementArray[audioRawElementSize];
@@ -92,7 +92,9 @@ static struct {
     int16_t* opusEncodeInputWritePtr;
     bool needClean;
     bool needSendFirstMuteOpusPackage;
-} audio = {
+};
+
+static struct AudioRuntime __not_in_flash("audio_data") audio = {
     .encoder = nullptr,
     .decoder = nullptr,
     .hapticBuf = nullptr,
@@ -335,7 +337,6 @@ static inline void __not_in_flash_func(speakerProc)() {
     if (!config.audioActive) {
         lerpResamplerReset(&audio.audioResampler);
         freeAudioRawElement(audioRawElement);
-        audioRawElement = nullptr;
         audio.opusEncodeInputWritePtr = audio.opusEncodeInputPcmBuffer;
         audio.opusEncodeInputChunkCount = 0;
         return;
@@ -344,7 +345,6 @@ static inline void __not_in_flash_func(speakerProc)() {
     // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
     const int outFrames = lerpResamplerProcessInt16Out(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, audio.opusEncodeInputWritePtr, audioResamplerOutputFrames);
     freeAudioRawElement(audioRawElement);
-    audioRawElement = nullptr;
     if (outFrames != audioResamplerOutputFrames) {
         LOGE("ResampleOut failed, outFrames:%d", outFrames);
     }
