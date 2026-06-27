@@ -70,7 +70,7 @@ struct MicPcmElement {
 };
 
 static struct {
-    alignas(8) uint32_t core1Stack[4096];
+    alignas(8) uint32_t core1Stack[8192];
     int16_t opusEncodeInputPcmBuffer[audioOpusInFrames * audioChannels];
     struct AudioRawElement audioRawElementArray[audioRawElementSize];
     struct MicOpuselement micOpusElementArray[micOpusElementSize];
