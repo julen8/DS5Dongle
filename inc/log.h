@@ -4,7 +4,11 @@
 #include <stdio.h>
 
 #define ENABLE_DEBUG 0
-#define ENABLE_INFO 0
+#define ENABLE_INFO 1
+
+#if !ENABLE_LOG
+#    define printf(...) ((void)0)
+#endif
 
 #define DUMP_FMT_(func_name, fmt, ...) "%s:%d:%s: " fmt, __FILE_NAME__, __LINE__, func_name, ##__VA_ARGS__
 

@@ -141,18 +141,29 @@ relocate_to_ram(lib/btstack/src/btstack_run_loop.c.o
         ".text.btstack_run_loop_base_poll_data_sources=.time_critical.btstack_run_loop_base_poll_data_sources|.text.btstack_run_loop_poll_data_sources_from_irq=.time_critical.btstack_run_loop_poll_data_sources_from_irq"
         "Phase B.4: btstack run-loop poll -> RAM")
 
+option(ENABLE_LOG "Enable Log" OFF)
+if (ENABLE_LOG)
+        pico_enable_stdio_uart(ds5-bridge 1)
+        set(ENABLE_LOG_VALUE 1)
+else()
+        pico_enable_stdio_uart(ds5-bridge 0)
+        set(ENABLE_LOG_VALUE 0)
+endif()
+
+pico_enable_stdio_usb(ds5-bridge 0)
+
 target_compile_options(ds5-bridge PRIVATE -fsigned-char -Wall -O3 -Wdouble-promotion -mfloat-abi=softfp)
 target_compile_options(opus PRIVATE -O3 -mfloat-abi=softfp)
 
 target_compile_definitions(ds5-bridge PRIVATE
+        ENABLE_LOG=${ENABLE_LOG_VALUE}
         CYW43_LWIP=0
         PICO_FLASH_ASSUME_CORE1_SAFE=0
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
 
-pico_enable_stdio_uart(ds5-bridge 1)
-pico_enable_stdio_usb(ds5-bridge 0)
+
 
 target_link_libraries(ds5-bridge
         pico_stdlib
