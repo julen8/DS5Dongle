@@ -62,7 +62,8 @@ subpacket content    (AudioSetup:7 , Haptic:64, control:63, Audio:200)
 constexpr int bluetoothRawPacketHeadSize = 1;
 constexpr int ds5BluetoothPacketHeadSize = 2;
 
-constexpr int subPacketHeadSize = 2;
+constexpr int subPacketHeadWithlengthSize = 2;     // 有length字段的subPacket头的大小
+constexpr int subPacketHeadWithoutlengthSize = 1;  // 没有length字段的subPacket头的大小
 constexpr int subPacketAudioSetupSize = 7;
 
 constexpr int ds5BluetoothPacketCrc32Size = 4;
@@ -119,10 +120,11 @@ constexpr size_t bluetoothRawPacketDataSize0x37 = 462 + bluetoothRawPacketHeadSi
 constexpr size_t bluetoothRawPacketDataSize0x38 = 526 + bluetoothRawPacketHeadSize;
 constexpr size_t bluetoothRawPacketDataSize0x39 = 547 + bluetoothRawPacketHeadSize;
 
-const struct {
+struct BluetoothRawPacketReportIDAndDataSizeTrack {
     uint8_t reportId;
     size_t dataSize;
-} bluetoothRawPacketReportIDAndDataSizeTrack[] = {
+};
+constexpr struct BluetoothRawPacketReportIDAndDataSizeTrack __not_in_flash("bluetoothPacket_data_ReportIDAndDataSizeTrack") bluetoothRawPacketReportIDAndDataSizeTrack[] = {
     {0x31, bluetoothRawPacketDataSize0x31}, {0x32, bluetoothRawPacketDataSize0x32}, {0x33, bluetoothRawPacketDataSize0x33},
     {0x34, bluetoothRawPacketDataSize0x34}, {0x35, bluetoothRawPacketDataSize0x35}, {0x36, bluetoothRawPacketDataSize0x36},
     {0x37, bluetoothRawPacketDataSize0x37}, {0x38, bluetoothRawPacketDataSize0x38}, {0x39, bluetoothRawPacketDataSize0x39},
@@ -463,106 +465,116 @@ static inline int __not_in_flash_func(setAudioSetupSubPacket)(uint8_t* buffer) {
     buffer[7] = config.audioBufferLength;                                            // 可能是缓存大小，影响延迟
     buffer[8] = bluetoothPacket.packetCounter++;                                     // 帧计数器，单调递增
 
-    static_assert(subPacketHeadSize + subPacketAudioSetupSize == 9, "audio setup sub packet size should be 9");
-    return subPacketHeadSize + subPacketAudioSetupSize;
+    static_assert(subPacketHeadWithlengthSize + subPacketAudioSetupSize == 9, "audio setup sub packet size should be 9");
+    return subPacketHeadWithlengthSize + subPacketAudioSetupSize;
 }
 
-// Sub-Packet  0x12: HAPTICS_DATA（共 66 字节）
+// Sub-Packet  0x12: HAPTICS_DATA（共 66 / 130 字节）
 /*
 [0x92]  [0x40]  [PCM data × 64 bytes ...]
  PID     len=64  int8_t stereo samples @ 3kHz
 */
 // HAPTICS_DATA = 0x12, // HAPTICS数据 PCM int8_t stereo samples @ 3kHz
 // DUALSENSE_BT_REPORT_MASK_HAS_LENGTH = 1 << 7,  // 0x80 — 修饰位：有 length 字段
-// DUALSENSE_BT_REPORT_MASK_HAS_DOUBLE = 1 << 6,  // 0x40 — 修饰位：双通道扩展 (默认不设置)
-static inline int __not_in_flash_func(setHapticSubPacket)(uint8_t* buffer, const uint8_t* hapticData) {
-    // sub packet head
-    buffer[0] = (0x12 | 1 << 7) & (~(1 << 6));
-    buffer[1] = subPacketHapticSize;
-    // sub packet content
-    memcpy(buffer + subPacketHeadSize, hapticData, subPacketHapticSize);
+// DUALSENSE_BT_REPORT_MASK_HAS_DOUBLE = 1 << 6,  // 0x40 — 修饰位：如果设置表示后面包含两个载荷，即两个HAPTICS数据包(2*64字节,但是此时len字段仍然是64),如果不设置表示后面只有一个载荷(64字节)
+static inline int __not_in_flash_func(setHapticSubPacket)(uint8_t* buffer, uint8_t* const* hapticData) {
+    bool hasDoubleData = hapticData[0] != nullptr && hapticData[1] != nullptr;
 
-    static_assert(subPacketHeadSize + subPacketHapticSize == 66, "haptic sub packet size should be 66");
-    return subPacketHeadSize + subPacketHapticSize;
+    // sub packet head
+    buffer[0] = hasDoubleData ? ((0x12 | 1 << 7) | (1 << 6)) : ((0x12 | 1 << 7) & (~(1 << 6)));
+    buffer[1] = subPacketHapticSize;
+
+    // sub packet content
+    uint8_t* contentPtr = buffer + subPacketHeadWithlengthSize;
+    if (hapticData[0] != nullptr) {
+        memcpy(contentPtr, hapticData[0], subPacketHapticSize);
+        contentPtr += subPacketHapticSize;
+    }
+    if (hapticData[1] != nullptr) {
+        memcpy(contentPtr, hapticData[1], subPacketHapticSize);
+        contentPtr += subPacketHapticSize;
+    }
+
+    return contentPtr - buffer;
 }
 
 // Sub-packet 0x10 : control
 /*
-[0x90]      [0x3F]    [control data × 63 bytes ...]
- PID        len=63   control data
+[0x90]          [control data × 63 bytes ...]
+ PID            control data
 // STATUS_DATA = 0x12, // STATUS数据 63字节
 // DUALSENSE_BT_REPORT_MASK_HAS_LENGTH = 1 << 7,  // 0x80 — 修饰位：有 length 字段
 // DUALSENSE_BT_REPORT_MASK_HAS_DOUBLE = 1 << 6,  // 0x40 — 修饰位：双通道扩展 (默认不设置)
 */
 static inline int __not_in_flash_func(setControlSubPacket)(uint8_t* buffer, const uint8_t* controlData) {
     // sub packet head
-    buffer[0] = (0x10 | 1 << 7) & (~(1 << 6));
-    buffer[1] = subPacketControlSize;
+    buffer[0] = 0x10;
     // sub packet content
-    memcpy(buffer + subPacketHeadSize, controlData, subPacketControlSize);
+    memcpy(buffer + subPacketHeadWithoutlengthSize, controlData, subPacketControlSize);
 
-    static_assert(subPacketHeadSize + subPacketControlSize == 65, "control sub packet size should be 65");
-    return subPacketHeadSize + subPacketControlSize;
+    static_assert(subPacketHeadWithoutlengthSize + subPacketControlSize == 64, "control sub packet size should be 64");
+    return subPacketHeadWithoutlengthSize + subPacketControlSize;
 }
 
-// Sub-Packet Speaker: 0x13,  L Headset Mono: 0x14, L Headset R Speaker: 0x15, Headset: 0x16 (共 202 字节)
+// Sub-Packet Speaker: 0x13,  L Headset Mono: 0x14, L Headset R Speaker: 0x15, Headset: 0x16 (共 202 / 402 字节)
 /*
 [0x??]  [0xc8]  [opus data × 200 bytes ...]
  PID     len=200  opus data
 */
 // Speaker: 0x13,L Headset Mono: 0x14,L Headset R Speaker: 0x15, Headset: 0x16 // 声音数据 opus编码
 // DUALSENSE_BT_REPORT_MASK_HAS_LENGTH = 1 << 7,  // 0x80 — 修饰位：有 length 字段
-// DUALSENSE_BT_REPORT_MASK_HAS_DOUBLE = 1 << 6,  // 0x40 — 修饰位：双通道扩展
-static inline int __not_in_flash_func(setAudioSubPacket)(uint8_t* buffer, const uint8_t* audioData) {
-    // sub packet head
-    buffer[0] = config.plugHeadset ? (0x16 | 1 << 7) & (~(1 << 6)) : (0x13 | 1 << 7) & (~(1 << 6));
-    buffer[1] = subPacketAudioSize;
-    // sub packet content
-    memcpy(buffer + subPacketHeadSize, audioData, subPacketAudioSize);
+// DUALSENSE_BT_REPORT_MASK_HAS_DOUBLE = 1 << 6,  // 0x40 — 修饰位：如果设置表示后面包含两个载荷，即两个声音数据包(2*200字节,但是此时len字段仍然是200),如果不设置表示后面只有一个载荷(200字节)
+static inline int __not_in_flash_func(setAudioSubPacket)(uint8_t* buffer, uint8_t* const* audioData) {
+    bool hasDoubleData = audioData[0] != nullptr && audioData[1] != nullptr;
 
-    static_assert(subPacketHeadSize + subPacketAudioSize == 202, "audio sub packet size should be 202");
-    return subPacketHeadSize + subPacketAudioSize;
+    // sub packet head
+    uint8_t buffer0 = config.plugHeadset ? 0x16 : 0x13;
+    buffer[0] = hasDoubleData ? ((buffer0 | 1 << 7) | (1 << 6)) : ((buffer0 | 1 << 7) & (~(1 << 6)));
+    buffer[1] = subPacketAudioSize;
+
+    // sub packet content
+    uint8_t* contentPtr = buffer + subPacketHeadWithlengthSize;
+    if (audioData[0] != nullptr) {
+        memcpy(contentPtr, audioData[0], subPacketAudioSize);
+        contentPtr += subPacketAudioSize;
+    }
+    if (audioData[1] != nullptr) {
+        memcpy(contentPtr, audioData[1], subPacketAudioSize);
+        contentPtr += subPacketAudioSize;
+    }
+
+    return contentPtr - buffer;
 }
 
-static inline void __not_in_flash_func(packed)(const uint8_t* controlData, uint8_t** hapticData, uint8_t** audioData, struct BluetoothRawPacket* pkt) {
+static inline void __not_in_flash_func(packed)(const uint8_t* controlData, uint8_t* const* hapticData, uint8_t* const* audioData, struct BluetoothRawPacket* pkt) {
     size_t offset = bluetoothRawPacketHeadSize + ds5BluetoothPacketHeadSize;
 
-    if (controlData != nullptr) {
-        if (bluetoothPacket.needSendControl) {
-            bluetoothPacket.needSendControl = false;
+    bool hasHapticData = hapticData[0] != nullptr || hapticData[1] != nullptr;
+    bool hasAudioData = audioData[0] != nullptr || audioData[1] != nullptr;
+    if (hasHapticData || hasAudioData) {
+        offset += setAudioSetupSubPacket(pkt->data + offset);
+        bluetoothPacket.needSendAudioSetup = false;
+
+        if (hasHapticData) {
+            offset += setHapticSubPacket(pkt->data + offset, hapticData);
         }
-        offset += setControlSubPacket(pkt->data + offset, controlData);
-    }
 
-    bool addedAudioSetup = false;
-    for (int i = 0; i < 2; i++) {
-        if (hapticData[i] != nullptr) {
-            if (!addedAudioSetup) {
-                offset += setAudioSetupSubPacket(pkt->data + offset);
-                addedAudioSetup = true;
-            }
-
-            offset += setHapticSubPacket(pkt->data + offset, hapticData[i]);
-        }
-    }
-
-    for (int i = 0; i < 2; i++) {
-        if (audioData[i] != nullptr) {
-            if (!addedAudioSetup) {
-                offset += setAudioSetupSubPacket(pkt->data + offset);
-                addedAudioSetup = true;
-            }
-
-            offset += setAudioSubPacket(pkt->data + offset, audioData[i]);
+        if (hasAudioData) {
+            offset += setAudioSubPacket(pkt->data + offset, audioData);
         }
     }
 
     if (bluetoothPacket.needSendAudioSetup) {
         bluetoothPacket.needSendAudioSetup = false;
-        if (!addedAudioSetup) {
-            offset += setAudioSetupSubPacket(pkt->data + offset);
-            addedAudioSetup = true;
+        offset += setAudioSetupSubPacket(pkt->data + offset);
+    }
+
+    // controlData 没有设置length字段，所以放到最后，避免占用过多空间
+    if (controlData != nullptr) {
+        if (bluetoothPacket.needSendControl) {
+            bluetoothPacket.needSendControl = false;
         }
+        offset += setControlSubPacket(pkt->data + offset, controlData);
     }
 
     if (offset + ds5BluetoothPacketCrc32Size < pkt->size) {
@@ -581,35 +593,42 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
     size_t pktSize = 0;
     bool haveAudioSetup = false;
 
+    // 最大size能够支持 bluetoothRawPacketDataSize0x39 -> 548
+    // 最大的情况: 1. 两个音频包，两个haptic包，一个audioSetup包
+    //             2. 两个音频包，一个haptic包，一个control包 + 一个audioSetup包
+    //             3. 一个音频包，两个haptic包，一个control包 + 一个audioSetup包
+
     // 优先尝试拿两个hapticData
     queue_try_remove(&bluetoothPacket.subPacketHapticQueue, &hapticData[0]);
     queue_try_remove(&bluetoothPacket.subPacketHapticQueue, &hapticData[1]);
     for (int i = 0; i < 2; i++) {
         if (hapticData[i] != nullptr) {
-            pktSize += subPacketHeadSize;
             pktSize += subPacketHapticSize;
-            // 66
+            // 64
         }
+    }
+    if (pktSize > 0) {
+        pktSize += subPacketHeadWithlengthSize;
+        // 2
     }
 
     queue_try_remove(&bluetoothPacket.subPacketAudioQueue, &audioData[0]);
-    // 如果没有hapticData，就尝试拿两个audioData
-    if (pktSize == 0) {
-        queue_try_remove(&bluetoothPacket.subPacketAudioQueue, &audioData[1]);
-    }
-
+    queue_try_remove(&bluetoothPacket.subPacketAudioQueue, &audioData[1]);
     for (int i = 0; i < 2; i++) {
         if (audioData[i] != nullptr) {
-            pktSize += subPacketHeadSize;
             pktSize += subPacketAudioSize;
-            // 202
+            // 200
         }
+    }
+    if (audioData[0] != nullptr || audioData[1] != nullptr) {
+        pktSize += subPacketHeadWithlengthSize;
+        // 2
     }
 
     // 只要有 audioData 或者 hapticData 就要加上 audioSetup
     if (pktSize > 0) {
         haveAudioSetup = true;
-        pktSize += subPacketHeadSize;
+        pktSize += subPacketHeadWithlengthSize;
         pktSize += subPacketAudioSetupSize;
         // 9
     }
@@ -620,16 +639,18 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
         return nullptr;
     }
 
-    // 尝试拿controlData
-    queue_try_remove(&bluetoothPacket.subPacketControlQueue, &controlData);
-    if (controlData != nullptr) {
-        pktSize += subPacketHeadSize;
-        pktSize += subPacketControlSize;
-        // 65
+    if ((bluetoothRawPacketDataSize0x39 - bluetoothRawPacketHeadSize - ds5BluetoothPacketHeadSize - ds5BluetoothPacketCrc32Size - pktSize) >= (subPacketHeadWithlengthSize + subPacketControlSize)) {
+        // 还有空间放controlData
+        queue_try_remove(&bluetoothPacket.subPacketControlQueue, &controlData);
+        if (controlData != nullptr) {
+            pktSize += subPacketHeadWithoutlengthSize;
+            pktSize += subPacketControlSize;
+            // 64
+        }
     }
 
     if (bluetoothPacket.needSendAudioSetup && !haveAudioSetup) {
-        pktSize += subPacketHeadSize;
+        pktSize += subPacketHeadWithlengthSize;
         pktSize += subPacketAudioSetupSize;
         // 9
     }
@@ -643,34 +664,6 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
     pktSize += ds5BluetoothPacketHeadSize;
     pktSize += ds5BluetoothPacketCrc32Size;
     // 7
-
-    // 可以判断一下是否还能再装一个audioData (当只有一个hapticData + 一个audioData + 没有controlData的时候，剩余空间是够的)
-    if ((bluetoothRawPacketDataSize0x39 - pktSize) > (subPacketHeadSize + subPacketAudioSize)) {
-        if (audioData[0] == nullptr && audioData[1] != nullptr) {
-            audioData[0] = audioData[1];
-            audioData[1] = nullptr;
-        }
-
-        if (audioData[1] == nullptr) {
-            queue_try_remove(&bluetoothPacket.subPacketAudioQueue, &audioData[1]);
-            if (audioData[1] != nullptr) {
-                pktSize += subPacketHeadSize;
-                pktSize += subPacketAudioSize;
-                // 202
-
-                if (!haveAudioSetup) {
-                    haveAudioSetup = true;
-                    pktSize += subPacketHeadSize;
-                    pktSize += subPacketAudioSetupSize;
-                    // 9
-                }
-            }
-        }
-    }
-
-    // 最大size能够支持 bluetoothRawPacketDataSize0x39 -> 548
-    // 最大的情况: 1. 两个音频包，那么就要少一个hapticData或者少一个controlData
-    //           2. 1个音频包两个haptic包
 
     struct BluetoothRawPacket* pkt = newBluetoothRawPacket(pktSize);
     if (pkt == nullptr) {
