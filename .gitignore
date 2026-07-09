@@ -3,5 +3,6 @@ build
 .idea
 example
 /pico-sdk/
-compile_commands.json
-.cache
+/compile_commands.json
+/.cache
+/arm-gnu-toolchain

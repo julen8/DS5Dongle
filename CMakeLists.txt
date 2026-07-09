@@ -111,8 +111,11 @@ relocate_to_ram(lib/btstack/src/hci.c.o
         ".text.hci_run=.time_critical.hci_run|.text.hci_send_acl_packet_fragments=.time_critical.hci_send_acl_packet_fragments|.text.hci_send_acl_packet_buffer=.time_critical.hci_send_acl_packet_buffer"
         "Phase B.3: hci.c TX pump + ACL out -> RAM")
 relocate_to_ram(lib/btstack/src/l2cap.c.o
-        ".text.l2cap_run=.time_critical.l2cap_run|.text.l2cap_send=.time_critical.l2cap_send|.text.l2cap_send_prepared=.time_critical.l2cap_send_prepared|.text.l2cap_notify_channel_can_send=.time_critical.l2cap_notify_channel_can_send"
+        ".text.l2cap_run=.time_critical.l2cap_run|.text.l2cap_send=.time_critical.l2cap_send|.text.l2cap_send_prepared=.time_critical.l2cap_send_prepared|.text.l2cap_notify_channel_can_send=.time_critical.l2cap_notify_channel_can_send|.text.l2cap_request_can_send_now_event=.time_critical.l2cap_request_can_send_now_event"
         "Phase B.3: l2cap.c TX pump + sends -> RAM")
+relocate_to_ram(lib/btstack/src/btstack_linked_list.c.o
+    ".text.btstack_linked_list_iterator_init=.time_critical.btstack_linked_list_iterator_init|.text.btstack_linked_list_iterator_has_next=.time_critical.btstack_linked_list_iterator_has_next|.text.btstack_linked_list_iterator_next=.time_critical.btstack_linked_list_iterator_next"
+    "Phase B.3: btstack linked-list iterators -> RAM")
 relocate_to_ram(lib/cyw43-driver/src/cyw43_ll.c.o
         ".text.cyw43_ll_write_backplane_mem=.time_critical.cyw43_ll_write_backplane_mem|.text.cyw43_ll_read_backplane_mem=.time_critical.cyw43_ll_read_backplane_mem|.text.cyw43_write_backplane=.time_critical.cyw43_write_backplane|.text.cyw43_read_backplane.constprop.0=.time_critical.cyw43_read_backplane"
         "Phase B.3: cyw43 backplane accessors -> RAM")

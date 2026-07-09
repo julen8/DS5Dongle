@@ -13,8 +13,10 @@ jobs:
       image: debian:trixie
 
     env:
-      PICO_SDK_VERSION: "2.2.0"
-      TINYUSB_VERSION: "0.20.0"
+      PICO_SDK_VERSION: "2.3.0"
+      TINYUSB_VERSION: "0.21.0"
+      ARM_TOOLCHAIN_URL: "https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi.tar.xz"
+      ARM_TOOLCHAIN_PATH: /opt/arm-toolchain
 
     steps:
       # ---- 0. 安装编译依赖 ----
@@ -29,13 +31,11 @@ jobs:
             python3 \
             gcc \
             g++ \
-            gcc-arm-none-eabi \
-            libnewlib-arm-none-eabi \
-            libstdc++-arm-none-eabi-newlib \
-            binutils-arm-none-eabi \
-            ca-certificates
+            ca-certificates \
+            curl \
+            xz-utils
 
-      # ---- 1. 检出源码（含子模块） ----
+      # ---- 0. 检出源码（含子模块） ----
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -44,6 +44,23 @@ jobs:
 
       - name: Mark workspace as safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # --- 0.1 下载并安装 ARM 工具链 ----
+      - name: Download ARM toolchain
+        run: |
+          mkdir -p "$ARM_TOOLCHAIN_PATH"
+          curl -fsSL "$ARM_TOOLCHAIN_URL" | tar -xJ -C "$ARM_TOOLCHAIN_PATH" --strip-components=1
+
+      # --- 0.2 将 ARM 工具链添加到 PATH ----
+      - name: Add ARM toolchain to PATH
+        run: |
+          echo "$ARM_TOOLCHAIN_PATH/bin" >> "$GITHUB_PATH"
+
+      # --- 0.3 验证 ARM 工具链安装 ----
+      - name: Verify ARM toolchain
+        run: |
+          which arm-none-eabi-gcc
+          arm-none-eabi-gcc --version
 
       # ---- 2. 克隆 Pico SDK ----
       - name: Clone Pico SDK
@@ -83,6 +100,7 @@ jobs:
           cd "${GITHUB_WORKSPACE}/build"
           PICO_SDK_PATH="${GITHUB_WORKSPACE}/pico-sdk" cmake "${GITHUB_WORKSPACE}" \
             -G Ninja \
+            -DPICO_TOOLCHAIN_PATH="${ARM_TOOLCHAIN_PATH}" \
             -DCMAKE_BUILD_TYPE=Release
 
       # ---- 6. 编译 ----

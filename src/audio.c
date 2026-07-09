@@ -4,7 +4,6 @@
 
 #include "audio.h"
 
-#include <assert.h>
 #include <opus.h>
 #include <pico/flash.h>
 #include <pico/multicore.h>

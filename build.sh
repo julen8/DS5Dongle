@@ -1,18 +1,30 @@
 #!/bin/bash
 set -e
 
-WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PICO_SDK_DIR="${WORK_DIR}/pico-sdk"
-BUILD_DIR="${WORK_DIR}/build"
-PICO_SDK_VERSION="2.2.0"
-TINYUSB_VERSION="0.20.0"
-
 # ---- 颜色输出 ----
 info()  { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
 ok()    { echo -e "\033[1;32m[OK]\033[0m    $*"; }
 warn()  { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
 die()   { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; exit 1; }
 
+WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PICO_SDK_DIR="${WORK_DIR}/pico-sdk"
+BUILD_DIR="${WORK_DIR}/build"
+PICO_SDK_VERSION="2.3.0"
+TINYUSB_VERSION="0.21.0"
+
+arch=$(uname -m)
+
+if [ "$arch" = "x86_64" ]; then
+  ARM_TOOLCHAIN_URL="https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi.tar.xz"
+elif [ "$arch" = "aarch64" ]; then
+  ARM_TOOLCHAIN_URL="https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-aarch64-arm-none-eabi.tar.xz"
+else
+  die "未知架构: $arch"
+fi
+
+ARM_TOOLCHAIN_PATH="${WORK_DIR}/arm-gnu-toolchain"
+export PATH="${ARM_TOOLCHAIN_PATH}/bin:${PATH}"
 
 
 # ---- 0. 安装编译依赖 ----
@@ -24,12 +36,10 @@ PACKAGES=(
     python3
     gcc
     g++
-    gcc-arm-none-eabi
-    libnewlib-arm-none-eabi
-    libstdc++-arm-none-eabi-newlib
-    binutils-arm-none-eabi
     ca-certificates
     ccache
+    curl
+    xz-utils
 )
 MISSING=()
 for pkg in "${PACKAGES[@]}"; do
@@ -51,6 +61,18 @@ if [ ${#MISSING[@]} -gt 0 ]; then
     ok "依赖安装完成"
 else
     ok "所有依赖已安装，跳过"
+fi
+
+# --- 0.1 检查 ARM 工具链 ----
+if ! command -v arm-none-eabi-gcc >/dev/null 2>&1; then
+    info "ARM 工具链未安装，开始下载..."
+    mkdir -p "${ARM_TOOLCHAIN_PATH}"
+    curl -sSL "${ARM_TOOLCHAIN_URL}" -o "${ARM_TOOLCHAIN_PATH}/arm-gnu-toolchain.tar.xz"
+    info "解压 ARM 工具链..."
+    tar -xf "${ARM_TOOLCHAIN_PATH}/arm-gnu-toolchain.tar.xz" -C "${ARM_TOOLCHAIN_PATH}" --strip-components=1
+    ok "ARM 工具链安装完成"
+else
+    ok "ARM 工具链已安装，跳过"
 fi
 
 # ---- 1. 初始化源码子模块 ----
