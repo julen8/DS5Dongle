@@ -45,11 +45,22 @@ jobs:
       - name: Mark workspace as safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # ---- 0.05 缓存 ARM 工具链 ----
+      - name: Restore ARM toolchain cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ARM_TOOLCHAIN_PATH }}
+          key: ${{ runner.os }}-arm-toolchain-15.3.rel1-x86_64
+
       # --- 0.1 下载并安装 ARM 工具链 ----
       - name: Download ARM toolchain
         run: |
-          mkdir -p "$ARM_TOOLCHAIN_PATH"
-          curl -fsSL "$ARM_TOOLCHAIN_URL" | tar -xJ -C "$ARM_TOOLCHAIN_PATH" --strip-components=1
+          if [ -x "$ARM_TOOLCHAIN_PATH/bin/arm-none-eabi-gcc" ]; then
+            echo "ARM toolchain cache hit, skip download"
+          else
+            mkdir -p "$ARM_TOOLCHAIN_PATH"
+            curl -fsSL "$ARM_TOOLCHAIN_URL" | tar -xJ -C "$ARM_TOOLCHAIN_PATH" --strip-components=1
+          fi
 
       # --- 0.2 将 ARM 工具链添加到 PATH ----
       - name: Add ARM toolchain to PATH

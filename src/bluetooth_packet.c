@@ -569,7 +569,7 @@ static inline void __not_in_flash_func(packed)(const uint8_t* controlData, uint8
         offset += setAudioSetupSubPacket(pkt->data + offset);
     }
 
-    // controlData 没有设置length字段，所以放到最后，避免占用过多空间
+    // controlData 没有设置length字段，所以放到最后
     if (controlData != nullptr) {
         if (bluetoothPacket.needSendControl) {
             bluetoothPacket.needSendControl = false;
