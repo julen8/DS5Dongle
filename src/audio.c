@@ -187,7 +187,7 @@ static inline void cleanRemainingData() {
 void __not_in_flash_func(audioLoop)() {
     // Mic playback: drain decoded mic PCM into the USB IN endpoint
     static struct MicPcmElement* pcmElement = nullptr;
-    if (queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
+    if (config.micActive && queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
         // The controller mic is mono, but the USB descriptor presents a 2-channel
         // mic (matching the real DS5) so Windows doesn't conflict with its cached
         // DS5 audio format. Duplicate each mono sample into L and R.
