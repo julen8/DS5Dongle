@@ -57,7 +57,7 @@ struct AudioRawElement {
     atomic_bool inuse;
 };
 
-struct MicOpuselement {
+struct MicOpusElement {
     uint8_t data[micOpusSize];
     atomic_bool inuse;
 };
@@ -72,7 +72,7 @@ struct AudioRuntime {
     alignas(8) uint32_t core1Stack[8192];
     int16_t opusEncodeInputPcmBuffer[audioOpusInFrames * audioChannels];
     struct AudioRawElement audioRawElementArray[audioRawElementSize];
-    struct MicOpuselement micOpusElementArray[micOpusElementSize];
+    struct MicOpusElement micOpusElementArray[micOpusElementSize];
     struct MicPcmElement micPcmElementArray[micPcmElementSize];
     lerpResampler audioResampler;
     lerpResampler hapticResampler;
@@ -142,7 +142,7 @@ static inline struct MicPcmElement* __not_in_flash_func(getMicPcmElement)() {
 
 static inline void __not_in_flash_func(freeMicPcmElement)(struct MicPcmElement* element) { atomic_store(&element->inuse, false); }
 
-static inline struct MicOpuselement* __not_in_flash_func(getMicOpusElement)() {
+static inline struct MicOpusElement* __not_in_flash_func(getMicOpusElement)() {
     for (int i = 0; i < micOpusElementSize; ++i) {
         // 原子地占用空闲元素，避免与 core1 的释放产生跨核竞争
         bool expected = false;
@@ -154,7 +154,7 @@ static inline struct MicOpuselement* __not_in_flash_func(getMicOpusElement)() {
     return nullptr;
 }
 
-static inline void __not_in_flash_func(freeMicOpusElement)(struct MicOpuselement* element) { atomic_store(&element->inuse, false); }
+static inline void __not_in_flash_func(freeMicOpusElement)(struct MicOpusElement* element) { atomic_store(&element->inuse, false); }
 
 static inline void cleanRemainingData() {
     {
@@ -377,7 +377,7 @@ static inline void __not_in_flash_func(speakerProc)() {
 // Mic path: opus packets from the controller (core0 mic_fifo) -> opus decode ->
 // PCM into mic_decode_fifo for audio_loop to push to the USB IN endpoint.
 static void __not_in_flash_func(micProc)() {
-    struct MicOpuselement* opusElement = nullptr;
+    struct MicOpusElement* opusElement = nullptr;
     if (!queue_try_remove(&audio.micOpusFifo, (void*)&opusElement)) {
         return;
     }
@@ -426,7 +426,7 @@ void __not_in_flash_func(micAddOpusQueue)(uint8_t* data, uint16_t len) {
         return;
     }
 
-    struct MicOpuselement* opusElement = getMicOpusElement();
+    struct MicOpusElement* opusElement = getMicOpusElement();
     if (opusElement == nullptr) {
         LOGE("no free micOpusElement");
         return;
@@ -446,7 +446,7 @@ void audioInit() {
 
     // Mic queues are read from audio_loop on core0 every iteration, so they
     // must exist regardless of the speaker-proc build flag.
-    queue_init(&audio.micOpusFifo, sizeof(struct MicOpuselement*), micOpusElementSize);
+    queue_init(&audio.micOpusFifo, sizeof(struct MicOpusElement*), micOpusElementSize);
     queue_init(&audio.micPcmFifo, sizeof(struct MicPcmElement*), micPcmElementSize);
     queue_init(&audio.audioPcmFifo, sizeof(struct AudioRawElement*), audioRawElementSize);
 
