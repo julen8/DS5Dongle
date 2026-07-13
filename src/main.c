@@ -57,6 +57,7 @@ int main() {
         tud_task();
         usbInterruptLoop();
         audioLoop();
+        btRequestSend();
         btInquiringLed();
     }
 }

@@ -274,9 +274,6 @@ void __not_in_flash_func(audioLoop)() {
                 }
 
                 audio.currentAudioRawElement = nullptr;
-            } else if (audio.audioBufPos == audioResamplerInputFrames * audioChannels / 2) {
-                // 音频在另外一个core通知发送会有问题，所以在这里来通知，假设到一半的时候opus已经编码好了
-                btRequestSend();
             }
         }
 

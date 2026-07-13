@@ -3,28 +3,30 @@
 #include <stdint.h>
 
 struct ConfigType {
-    bool plugHeadset;           // plug headset
-    bool isDse;                 // dse
-    volatile bool audioActive;  // audio active
-    bool micActive;             // mic active
-    bool disableMic;            // disable mic
-    uint8_t inactiveTime;       // [10,60] min
-    uint8_t pollingRateMode;    // 0: 250Hz, 1: 500Hz, 2: 1000Hz
-    uint8_t audioBufferLength;  // [16,128]
-    uint8_t controllerMode;     // 0: DS5, 1: DSE, 2: Auto
+    bool useSendDoubleDataPacket;  // 启用一个bt包包含两个音频和触摸反馈子包
+    bool plugHeadset;              // plug headset
+    bool isDse;                    // dse
+    volatile bool audioActive;     // audio active
+    bool micActive;                // mic active
+    bool disableMic;               // disable mic
+    uint8_t inactiveTime;          // [10,60] min
+    uint8_t pollingRateMode;       // 0: 250Hz, 1: 500Hz, 2: 1000Hz
+    uint8_t audioBufferLength;     // [16,128]
+    uint8_t controllerMode;        // 0: DS5, 1: DSE, 2: Auto
     float microphoneGain;
     struct {
         uint8_t speaker;
         uint8_t microphone;
     } mute;  // 0: SPEAKER(0x02) 1: MIC(0x05)
     struct {
-        int16_t speaker;  // [-25600, 0] , windows音量设置来的
-        int16_t microphone; // [0, 12288]
+        int16_t speaker;     // [-25600, 0] , windows音量设置来的
+        int16_t microphone;  // [0, 12288]
     } volume;
 };
 
 #define CONFIG_DEFAULTS                            \
     {                                              \
+        .useSendDoubleDataPacket = true,           \
         .plugHeadset = false,                      \
         .isDse = false,                            \
         .audioActive = false,                      \
