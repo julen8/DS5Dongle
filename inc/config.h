@@ -3,17 +3,17 @@
 #include <stdint.h>
 
 struct ConfigType {
-    bool useSendDoubleDataPacket;  // 启用一个bt包包含两个音频和触摸反馈子包
-    bool plugHeadset;              // plug headset
-    bool isDse;                    // dse
-    volatile bool audioActive;     // audio active
-    bool micActive;                // mic active
-    bool disableMic;               // disable mic
-    uint8_t inactiveTime;          // [10,60] min
-    uint8_t pollingRateMode;       // 0: 250Hz, 1: 500Hz, 2: 1000Hz
-    uint8_t audioBufferLength;     // [16,128]
-    uint8_t controllerMode;        // 0: DS5, 1: DSE, 2: Auto
     float microphoneGain;
+    bool enableSendDoubleDataPacket;  // 启用一个bt包包含两个音频和触摸反馈子包
+    bool disableMic;                  // disable mic
+    volatile bool plugHeadset;        // plug headset
+    volatile bool isDse;              // dse
+    volatile bool audioActive;        // audio active
+    volatile bool micActive;          // mic active
+    uint8_t inactiveTime;             // [10,60] min
+    uint8_t pollingRateMode;          // 0: 250Hz, 1: 500Hz, 2: 1000Hz
+    uint8_t audioBufferLength;        // [16,128]
+    uint8_t controllerMode;           // 0: DS5, 1: DSE, 2: Auto
     struct {
         uint8_t speaker;
         uint8_t microphone;
@@ -26,17 +26,17 @@ struct ConfigType {
 
 #define CONFIG_DEFAULTS                            \
     {                                              \
-        .useSendDoubleDataPacket = true,           \
+        .microphoneGain = 1.4F,                    \
+        .enableSendDoubleDataPacket = true,        \
+        .disableMic = false,                       \
         .plugHeadset = false,                      \
         .isDse = false,                            \
         .audioActive = false,                      \
         .micActive = false,                        \
-        .disableMic = false,                       \
         .inactiveTime = 20,                        \
         .pollingRateMode = 2,                      \
         .audioBufferLength = 48,                   \
         .controllerMode = 2,                       \
-        .microphoneGain = 1.5F,                    \
         .mute = {.speaker = 0, .microphone = 0},   \
         .volume = {.speaker = 0, .microphone = 0}, \
     }

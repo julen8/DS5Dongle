@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static uint32_t  __not_in_flash("crc3_data")  crc32LookupTable[256] = {};
+static uint32_t __not_in_flash("crc3_data") crc32LookupTable[256] = {};
 
 inline uint32_t crc32TableEntry(uint32_t index) {
     for (unsigned bit = 0; bit < 8; ++bit) {
@@ -41,12 +41,12 @@ void __not_in_flash_func(fillOutputReportChecksum)(uint8_t *outputData, size_t l
     outputData[len - 1] = (crc >> 24) & 0xFF;
 }
 
-inline static uint32_t crc32Feature(const uint8_t *data, size_t size) {
+inline static uint32_t __not_in_flash_func(crc32Feature)(const uint8_t *data, size_t size) {
     // https://github.com/rafaelvaloto/Dualsense-Multiplatform/blob/main/Source/Private/GCore/Utils/CR32.cpp
     return crc32Seeded(data, size, 0x2060efc3);  // 0x53 seed
 }
 
-void fillFeatureReportChecksum(uint8_t *data, const size_t len) {
+void __not_in_flash_func(fillFeatureReportChecksum)(uint8_t *data, const size_t len) {
     uint32_t crc = crc32Feature(data, len - 4);
     data[len - 4] = (crc >> 0) & 0xFF;
     data[len - 3] = (crc >> 8) & 0xFF;

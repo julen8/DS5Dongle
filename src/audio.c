@@ -157,71 +157,63 @@ static inline struct MicOpusElement* __not_in_flash_func(getMicOpusElement)() {
 static inline void __not_in_flash_func(freeMicOpusElement)(struct MicOpusElement* element) { atomic_store(&element->inuse, false); }
 
 static inline void cleanRemainingData() {
-    {
-        struct AudioRawElement* audioRawElement = audio.currentAudioRawElement;
-        if (audioRawElement == nullptr) {
-            audioRawElement = getAudioRawElement();
-        }
-        if (audioRawElement != nullptr) {
-            if (!queue_try_add(&audio.audioPcmFifo, &audioRawElement)) {
-                LOGW("audio_fifo add failed");
-                freeAudioRawElement(audioRawElement);
-            }
-        }
-    }
-
-    {
-        freeSubPacket((uint8_t*)(audio.hapticBuf), subPacketTypeHaptic);
-        audio.rawPos = 0;
-        audio.hapticBufPos = 0;
-        audio.hapticBuf = nullptr;
-        lerpResamplerReset(&audio.hapticResampler);
-        audio.audioBufPos = 0;
+    audio.audioBufPos = 0;
+    if (audio.currentAudioRawElement != nullptr) {
+        freeAudioRawElement(audio.currentAudioRawElement);
         audio.currentAudioRawElement = nullptr;
     }
 
+    audio.hapticBufPos = 0;
+    if (audio.hapticBuf != nullptr) {
+        freeSubPacket((uint8_t*)(audio.hapticBuf), subPacketTypeHaptic);
+        audio.hapticBuf = nullptr;
+    }
+
+    audio.rawPos = 0;
+    lerpResamplerReset(&audio.hapticResampler);
     cleanAllCachedAudio();
     cleanAllCachedHaptic();
 }
 
 void __not_in_flash_func(audioLoop)() {
-    // Mic playback: drain decoded mic PCM into the USB IN endpoint
-    static struct MicPcmElement* pcmElement = nullptr;
-    if (config.micActive && queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
-        // The controller mic is mono, but the USB descriptor presents a 2-channel
-        // mic (matching the real DS5) so Windows doesn't conflict with its cached
-        // DS5 audio format. Duplicate each mono sample into L and R.
-        static int16_t micStereo[micFrames * 2];
-        float valFloat = 0.0F;
-        int16_t valInt16 = 0;
-        for (int i = 0; i < pcmElement->frames; i++) {
-            valFloat = config.microphoneGain * (float)pcmElement->data[i];
-            if (valFloat > 32767.0F) {
-                valInt16 = 32767;
-            } else if (valFloat < -32768.0F) {
-                valInt16 = -32768;
-            } else {
-                valInt16 = (int16_t)valFloat;
-            }
+    if (!config.disableMic) {
+        // Mic playback: drain decoded mic PCM into the USB IN endpoint
+        static struct MicPcmElement* pcmElement = nullptr;
+        if (config.micActive && queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
+            // The controller mic is mono, but the USB descriptor presents a 2-channel
+            // mic (matching the real DS5) so Windows doesn't conflict with its cached
+            // DS5 audio format. Duplicate each mono sample into L and R.
+            static int16_t micStereo[micFrames * 2];
+            float valFloat = 0.0F;
+            int16_t valInt16 = 0;
+            for (int i = 0; i < pcmElement->frames; i++) {
+                valFloat = config.microphoneGain * (float)pcmElement->data[i];
+                if (valFloat > 32767.0F) {
+                    valInt16 = 32767;
+                } else if (valFloat < -32768.0F) {
+                    valInt16 = -32768;
+                } else {
+                    valInt16 = (int16_t)valFloat;
+                }
 
-            micStereo[2 * i] = valInt16;
-            micStereo[(2 * i) + 1] = valInt16;
-        }
-        const uint16_t stereoLen = (uint16_t)(pcmElement->frames * 2 * sizeof(int16_t));
-        freeMicPcmElement(pcmElement);
-        uint16_t written = tud_audio_write(micStereo, stereoLen);
-        if (written != stereoLen) {
-            // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
-            // interface (the common case -- most games never do) tud_audio_write
-            // short-writes every frame, so an unconditional log would flood
-            // core0's hot path with the newlib formatting chain.
-            LOGE("[Audio] Warning: USB mic FIFO wrote %u/%u bytes", written, stereoLen);
+                micStereo[2 * i] = valInt16;
+                micStereo[(2 * i) + 1] = valInt16;
+            }
+            const uint16_t stereoLen = (uint16_t)(pcmElement->frames * 2 * sizeof(int16_t));
+            freeMicPcmElement(pcmElement);
+            uint16_t written = tud_audio_write(micStereo, stereoLen);
+            if (written != stereoLen) {
+                // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
+                // interface (the common case -- most games never do) tud_audio_write
+                // short-writes every frame, so an unconditional log would flood
+                // core0's hot path with the newlib formatting chain.
+                LOGE("[Audio] Warning: USB mic FIFO wrote %u/%u bytes", written, stereoLen);
+            }
         }
     }
 
     if (tud_audio_available() == 0) {
         if (!config.audioActive) {
-            // usb已经停止发送pcm数据了,但是这里需要把剩下的缓存的数据处理完
             if (audio.needClean) {
                 audio.needClean = false;
                 audio.needSendFirstMuteOpusPackage = true;
@@ -325,18 +317,30 @@ void __not_in_flash_func(audioLoop)() {
 }
 
 static inline void __not_in_flash_func(speakerProc)() {
+    static bool needReset = true;
     struct AudioRawElement* audioRawElement = nullptr;
+
+    if (!config.audioActive) {
+        while (queue_try_remove(&audio.audioPcmFifo, (void*)&audioRawElement)) {
+            if (audioRawElement != nullptr) {
+                freeAudioRawElement(audioRawElement);
+            }
+        }
+
+        if (needReset) {
+            needReset = false;
+            lerpResamplerReset(&audio.audioResampler);
+            audio.opusEncodeInputWritePtr = audio.opusEncodeInputPcmBuffer;
+            audio.opusEncodeInputChunkCount = 0;
+        }
+        return;
+    }
+
     if (!queue_try_remove(&audio.audioPcmFifo, (void*)&audioRawElement)) {
         return;
     }
 
-    if (!config.audioActive) {
-        lerpResamplerReset(&audio.audioResampler);
-        freeAudioRawElement(audioRawElement);
-        audio.opusEncodeInputWritePtr = audio.opusEncodeInputPcmBuffer;
-        audio.opusEncodeInputChunkCount = 0;
-        return;
-    }
+    needReset = true;
 
     // 将 audioResamplerInputFrames frames 重采样成 audioResamplerOutputFrames frames 以解决噪音问题。感谢 @Junhoo
     const int outFrames = lerpResamplerProcessInt16Out(&audio.audioResampler, audioRawElement->data, audioResamplerInputFrames, audio.opusEncodeInputWritePtr, audioResamplerOutputFrames);
@@ -378,6 +382,25 @@ static inline void __not_in_flash_func(speakerProc)() {
 // PCM into mic_decode_fifo for audio_loop to push to the USB IN endpoint.
 static void __not_in_flash_func(micProc)() {
     struct MicOpusElement* opusElement = nullptr;
+
+    if (!config.micActive) {
+        // If the mic is disabled, drain the micOpusFifo to avoid memory leaks.
+        while (queue_try_remove(&audio.micOpusFifo, (void*)&opusElement)) {
+            if (opusElement != nullptr) {
+                freeMicOpusElement(opusElement);
+            }
+        }
+
+        struct MicPcmElement* pcmElement = nullptr;
+        while (queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
+            if (pcmElement != nullptr) {
+                freeMicPcmElement(pcmElement);
+            }
+        }
+
+        return;
+    }
+
     if (!queue_try_remove(&audio.micOpusFifo, (void*)&opusElement)) {
         return;
     }
@@ -414,7 +437,9 @@ void __not_in_flash_func(core1Entry)() {
 
     for (;;) {
         speakerProc();
-        micProc();
+        if (!config.disableMic) {
+            micProc();
+        }
     }
 }
 

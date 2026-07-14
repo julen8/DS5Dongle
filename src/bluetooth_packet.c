@@ -408,7 +408,7 @@ bool __not_in_flash_func(hasBluetoothRawPacketCanSend)() {
     const uint controlCount = queue_get_level(&bluetoothPacket.subPacketControlQueue);
 
     if (config.audioActive) {
-        if (config.useSendDoubleDataPacket) {
+        if (config.enableSendDoubleDataPacket) {
             if (hapticCount >= 2 && audioCount >= 2) {
                 return true;
             }
@@ -592,7 +592,7 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
 
     if (!bluetoothPacket.needSendControlNow) {
         if (controlCount == 0) {
-            if (config.useSendDoubleDataPacket && config.audioActive) {
+            if (config.enableSendDoubleDataPacket && config.audioActive) {
                 if (hapticCount < 2 || audioCount < 2) {
                     return nullptr;
                 }
@@ -606,7 +606,7 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
     }
 
     // hapticData
-    if (!config.useSendDoubleDataPacket || sendDoubleDataPacket) {
+    if (!config.enableSendDoubleDataPacket || sendDoubleDataPacket) {
         queue_try_remove(&bluetoothPacket.subPacketHapticQueue, &hapticData[0]);
     }
     if (sendDoubleDataPacket) {
@@ -624,7 +624,7 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
     }
 
     // audioData
-    if (!config.useSendDoubleDataPacket || sendDoubleDataPacket) {
+    if (!config.enableSendDoubleDataPacket || sendDoubleDataPacket) {
         queue_try_remove(&bluetoothPacket.subPacketAudioQueue, &audioData[0]);
     }
     if (sendDoubleDataPacket) {
