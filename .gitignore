@@ -1,4 +1,3 @@
-build
 .vscode
 .idea
 example
@@ -6,3 +5,5 @@ example
 /compile_commands.json
 /.cache
 /arm-gnu-toolchain
+/build_debug
+/build_release

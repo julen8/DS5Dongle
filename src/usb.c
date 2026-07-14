@@ -64,7 +64,8 @@ static bool __not_in_flash_func(audio10SetReqEntity)(tusb_control_request_t cons
                     case AUDIO10_CS_REQ_SET_CUR:
                         // Only 1st form is supported
                         TU_VERIFY(p_request->wLength == 2);
-                        int16_t newVolume = *((int16_t const *)pBuff);
+                        int16_t newVolume = 0;
+                        memcpy(&newVolume, pBuff, sizeof(int16_t));
                         if (*volume != newVolume) {
                             *volume = newVolume;
                             if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
@@ -90,7 +91,7 @@ static bool __not_in_flash_func(audio10SetReqEntity)(tusb_control_request_t cons
     return false;
 }
 
-static bool  __not_in_flash_func(audio10GetReqEntity)(uint8_t rhport, tusb_control_request_t const *p_request) {
+static bool __not_in_flash_func(audio10GetReqEntity)(uint8_t rhport, tusb_control_request_t const *p_request) {
     // uint8_t channelNum = TU_U16_LOW(p_request->wValue);
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
@@ -180,10 +181,10 @@ static bool  __not_in_flash_func(audio10GetReqEntity)(uint8_t rhport, tusb_contr
 }
 
 // Invoked when audio class specific get request received for an entity
-bool  __not_in_flash_func(tud_audio_get_req_entity_cb)(uint8_t rhport, tusb_control_request_t const *p_request) { return audio10GetReqEntity(rhport, p_request); }
+bool __not_in_flash_func(tud_audio_get_req_entity_cb)(uint8_t rhport, tusb_control_request_t const *p_request) { return audio10GetReqEntity(rhport, p_request); }
 
 // Invoked when audio class specific set request received for an entity
-bool  __not_in_flash_func(tud_audio_set_req_entity_cb)(uint8_t rhport, tusb_control_request_t const *p_request, uint8_t *pBuff) { return audio10SetReqEntity(p_request, pBuff); }
+bool __not_in_flash_func(tud_audio_set_req_entity_cb)(uint8_t rhport, tusb_control_request_t const *p_request, uint8_t *pBuff) { return audio10SetReqEntity(p_request, pBuff); }
 
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {}
 

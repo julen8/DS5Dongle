@@ -77,10 +77,12 @@ constexpr int bluetoothRawPacketCount = 3;
 #define container_of(ptr, type, member) ({ (type*)((char*)(ptr) - offsetof(type, member)); })
 
 struct SubPacketBufferHaptic {
+    // 只在core0使用，所以不需要原子标志
     volatile bool inuse;
     uint8_t buf[subPacketHapticSize];
 };
 struct SubPacketBufferControl {
+    // 只在core0使用，所以不需要原子标志
     volatile bool inuse;
     uint8_t buf[subPacketControlSize];
 };
@@ -536,6 +538,11 @@ static inline int __not_in_flash_func(setAudioSubPacket)(uint8_t* buffer, uint8_
 }
 
 static inline void __not_in_flash_func(packed)(const uint8_t* controlData, uint8_t* const* hapticData, uint8_t* const* audioData, struct BluetoothRawPacket* pkt, bool sendDoubleDataPacket) {
+    assert(pkt != nullptr);
+    // pkt->size 必须由 newBluetoothRawPacket 从 report 表中取得，不能超过物理缓冲区
+    assert(pkt->size <= sizeof(pkt->data));
+    assert(pkt->size >= bluetoothRawPacketHeadSize + ds5BluetoothPacketHeadSize + ds5BluetoothPacketCrc32Size);
+
     size_t offset = bluetoothRawPacketHeadSize + ds5BluetoothPacketHeadSize;
 
     bool hasHapticData = hapticData[0] != nullptr || hapticData[1] != nullptr;
@@ -571,6 +578,9 @@ static inline void __not_in_flash_func(packed)(const uint8_t* controlData, uint8
     } else if (offset + ds5BluetoothPacketCrc32Size > pkt->size) {
         LOGE("packet size is too small:offset + ds5BluetoothPacketCrc32Size:%d, pkt->size:%d, pkt->data[1]:%02X", offset + ds5BluetoothPacketCrc32Size, pkt->size, pkt->data[1]);
     }
+
+    // 断言：实际写入的子包总长度加上 CRC 必须正好落在分配的包大小内。
+    assert(offset + ds5BluetoothPacketCrc32Size <= pkt->size);
 
     fillOutputReportChecksum(pkt->data + bluetoothRawPacketHeadSize, pkt->size - bluetoothRawPacketHeadSize);
 }

@@ -465,15 +465,28 @@ void __not_in_flash_func(micAddOpusQueue)(uint8_t* data, uint16_t len) {
     }
 }
 
-void audioInit() {
+bool audioInit() {
     lerpResamplerInit(&audio.audioResampler, audioInSampleRate, audioOutSampleRate);
     lerpResamplerInit(&audio.hapticResampler, hapticInSampleRate, hapticOutSampleRate);
 
     // Mic queues are read from audio_loop on core0 every iteration, so they
     // must exist regardless of the speaker-proc build flag.
-    queue_init(&audio.micOpusFifo, sizeof(struct MicOpusElement*), micOpusElementSize);
-    queue_init(&audio.micPcmFifo, sizeof(struct MicPcmElement*), micPcmElementSize);
-    queue_init(&audio.audioPcmFifo, sizeof(struct AudioRawElement*), audioRawElementSize);
+    bool success = false;
+    success = queue_init(&audio.micOpusFifo, sizeof(struct MicOpusElement*), micOpusElementSize);
+    if (!success) {
+        LOGE("micOpusFifo init failed");
+        return false;
+    }
+    success = queue_init(&audio.micPcmFifo, sizeof(struct MicPcmElement*), micPcmElementSize);
+    if (!success) {
+        LOGE("micPcmFifo init failed");
+        return false;
+    }
+    success = queue_init(&audio.audioPcmFifo, sizeof(struct AudioRawElement*), audioRawElementSize);
+    if (!success) {
+        LOGE("audioPcmFifo init failed");
+        return false;
+    }
 
     for (int i = 0; i < audioRawElementSize; ++i) {
         atomic_init(&audio.audioRawElementArray[i].inuse, false);
@@ -487,12 +500,12 @@ void audioInit() {
         atomic_init(&audio.micPcmElementArray[i].inuse, false);
     }
 
-    int error = 0;
+    int error = 1;
     // RESTRICTED_LOWDELAY: 强制纯 CELT，跳过 SILK/Hybrid 模式决策和 look-ahead 分析
     audio.encoder = opus_encoder_create(48000, audioChannels, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &error);
     if (error != 0) {
         LOGE("OpusEncoder create failed");
-        return;
+        return false;
     }
     opus_encoder_ctl(audio.encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
     // 码率 = 200字节 × 8bit × 100fps = 160kbps，确保每帧 CBR 输出恰好 200 字节以匹配协议
@@ -507,7 +520,9 @@ void audioInit() {
     audio.decoder = opus_decoder_create(48000, micChannels, &error);
     if (error != 0) {
         LOGE("[Audio] OpusDecoder create failed");
+        return false;
     }
 
     multicore_launch_core1_with_stack(core1Entry, audio.core1Stack, sizeof(audio.core1Stack));
+    return true;
 }

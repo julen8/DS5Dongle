@@ -48,7 +48,10 @@ int main() {
 
     bluetoothPacketInit();
     btInit();
-    audioInit();
+    if (!audioInit()) {
+        LOGE("Audio initialization failed");
+        return 1;
+    }
     watchdog_enable(5000, true);
 
     for (;;) {

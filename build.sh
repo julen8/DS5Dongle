@@ -9,7 +9,8 @@ die()   { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; exit 1; }
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PICO_SDK_DIR="${WORK_DIR}/pico-sdk"
-BUILD_DIR="${WORK_DIR}/build"
+BUILD_DEBUG_DIR="${WORK_DIR}/build_debug"
+BUILD_RELEASE_DIR="${WORK_DIR}/build_release"
 PICO_SDK_VERSION="2.3.0"
 TINYUSB_VERSION="0.21.0"
 
@@ -119,23 +120,28 @@ fi
 
 # ---- 5. CMake 配置 ----
 info "CMake 配置中..."
-mkdir -p "${BUILD_DIR}"
-cd "${BUILD_DIR}"
+mkdir -p "${BUILD_DEBUG_DIR}" "${BUILD_RELEASE_DIR}"
+
 export PICO_SDK_PATH="${PICO_SDK_DIR}"
-PICO_SDK_PATH="${PICO_SDK_DIR}" cmake "${WORK_DIR}" -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_LOG=ON
+PICO_SDK_PATH="${PICO_SDK_DIR}" cmake -S "${WORK_DIR}" -B "${BUILD_DEBUG_DIR}" -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_LOG=ON
+PICO_SDK_PATH="${PICO_SDK_DIR}" cmake -S "${WORK_DIR}" -B "${BUILD_RELEASE_DIR}" -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_LOG=OFF
 ok "CMake 配置完成"
 
 # ---- 6. 编译 ----
 info "开始编译（ninja）..."
-ninja clean
-ninja
+PICO_SDK_PATH="${PICO_SDK_DIR}" cmake --build "${BUILD_DEBUG_DIR}" --config Debug --target clean
+PICO_SDK_PATH="${PICO_SDK_DIR}" cmake --build "${BUILD_DEBUG_DIR}" --config Debug
+
+PICO_SDK_PATH="${PICO_SDK_DIR}" cmake --build "${BUILD_RELEASE_DIR}" --config Release --target clean
+PICO_SDK_PATH="${PICO_SDK_DIR}" cmake --build "${BUILD_RELEASE_DIR}" --config Release
 ok "编译完成"
 
 # ---- 7. 输出结果 ----
 echo ""
 echo "============================================================"
 echo " 编译产物："
-ls -lh "${BUILD_DIR}"/*.uf2 "${BUILD_DIR}"/*.elf 2>/dev/null || true
+ls -lh "${BUILD_DEBUG_DIR}"/*.uf2 "${BUILD_DEBUG_DIR}"/*.elf 2>/dev/null || true
+ls -lh "${BUILD_RELEASE_DIR}"/*.uf2 "${BUILD_RELEASE_DIR}"/*.elf 2>/dev/null || true
 echo "============================================================"
 echo " 刷机方法："
 echo "   1. 按住 Pico 上的 BOOTSEL 按钮，插入 USB"
