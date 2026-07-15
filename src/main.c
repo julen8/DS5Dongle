@@ -3,6 +3,7 @@
 //
 
 #include <bsp/board_api.h>
+#include <hardware/clocks.h>
 #include <hardware/watchdog.h>
 #include <pico/cyw43_arch.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include "audio.h"
 #include "bluetooth_packet.h"
 #include "bt.h"
+#include "config.h"
 #include "crc32.h"
 #include "log.h"
 #include "usb.h"
@@ -17,6 +19,8 @@
 int main() {
     board_init();
     printf("\n\n===================\nBuild Time: " __DATE__ " " __TIME__ "\n===================\n\n");
+    set_sys_clock_khz(SYS_CLOCK_KHZ, true);
+
     initCrc32();
 
     constexpr tusb_rhport_init_t devInit = {.role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_FULL};
@@ -52,10 +56,15 @@ int main() {
         LOGE("Audio initialization failed");
         return 1;
     }
-    watchdog_enable(5000, true);
+    watchdog_enable(1000, true);
 
     for (;;) {
         watchdog_update();
+        if (config.audioActive && config.enableSendDoubleDataPacket && config.pollingRateMode == 2) {
+            // 1000Hz模式下，且启用了双包发送，此时蓝牙的发包会比较费时，所以在这里多发送一次usb数据，保证usb的回报率能保持到1000Hz
+            tud_task();
+            usbInterruptLoop();
+        }
         cyw43_arch_poll();
         tud_task();
         usbInterruptLoop();

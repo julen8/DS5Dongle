@@ -158,10 +158,36 @@ pico_enable_stdio_usb(ds5-bridge 0)
 target_compile_options(ds5-bridge PRIVATE -fsigned-char -Wall -O3 -Wdouble-promotion -mfloat-abi=softfp)
 target_compile_options(opus PRIVATE -O3 -mfloat-abi=softfp)
 
+
+set(SYS_CLOCK_KHZ_VALUE 200000)
+
+
+# CYW43 PIO-SPI clock divider is derived from SYS_CLOCK so the effective PIO clock
+# stays at the known-good target regardless of the chosen system clock.
+# divider = SYS_CLOCK / TARGET, expressed as int + frac8/256.
+# The original 200 MHz / (2 + 171/256) gives ~75 MHz, so keep that as the target.
+set(CYW43_PIO_TARGET_KHZ_VALUE 75000)
+math(EXPR CYW43_PIO_CLOCK_DIV_INT_VALUE
+        "${SYS_CLOCK_KHZ_VALUE} / ${CYW43_PIO_TARGET_KHZ_VALUE}")
+math(EXPR _CYW43_PIO_CLOCK_DIV_REM
+        "${SYS_CLOCK_KHZ_VALUE} - (${CYW43_PIO_CLOCK_DIV_INT_VALUE} * ${CYW43_PIO_TARGET_KHZ_VALUE})")
+# frac8 = round(rem * 256 / target)
+math(EXPR CYW43_PIO_CLOCK_DIV_FRAC8_VALUE
+        "(${_CYW43_PIO_CLOCK_DIV_REM} * 256 + ${CYW43_PIO_TARGET_KHZ_VALUE} / 2) / ${CYW43_PIO_TARGET_KHZ_VALUE}")
+# Carry over if rounding pushed frac8 to a full step (256/256 == +1 on the int part).
+if (CYW43_PIO_CLOCK_DIV_FRAC8_VALUE GREATER_EQUAL 256)
+        math(EXPR CYW43_PIO_CLOCK_DIV_INT_VALUE "${CYW43_PIO_CLOCK_DIV_INT_VALUE} + 1")
+        set(CYW43_PIO_CLOCK_DIV_FRAC8_VALUE 0)
+endif()
+message(STATUS "CYW43 PIO clock divider: ${CYW43_PIO_CLOCK_DIV_INT_VALUE} + ${CYW43_PIO_CLOCK_DIV_FRAC8_VALUE}/256 (SYS ${SYS_CLOCK_KHZ_VALUE} kHz -> ~${CYW43_PIO_TARGET_KHZ_VALUE} kHz)")
+
 target_compile_definitions(ds5-bridge PRIVATE
         ENABLE_LOG=${ENABLE_LOG_VALUE}
         CYW43_LWIP=0
         PICO_FLASH_ASSUME_CORE1_SAFE=0
+        SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
+        CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_INT_VALUE}
+        CYW43_PIO_CLOCK_DIV_FRAC8=${CYW43_PIO_CLOCK_DIV_FRAC8_VALUE}
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
