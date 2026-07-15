@@ -17,9 +17,9 @@
 #include "usb.h"
 
 int main() {
+    set_sys_clock_khz(SYS_CLOCK_KHZ, true);
     board_init();
     printf("\n\n===================\nBuild Time: " __DATE__ " " __TIME__ "\n===================\n\n");
-    set_sys_clock_khz(SYS_CLOCK_KHZ, true);
 
     initCrc32();
 

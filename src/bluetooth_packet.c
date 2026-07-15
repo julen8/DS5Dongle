@@ -66,7 +66,7 @@ constexpr int subPacketAudioSetupSize = 6;
 constexpr int ds5BluetoothPacketCrc32Size = 4;
 
 constexpr int subPacketBuffHapticCount = 4;
-constexpr int subPacketBuffControlCount = 2;
+constexpr int subPacketBuffControlCount = 4;
 constexpr int subPacketBuffAudioCount = 4;
 constexpr int bluetoothRawPacketCount = 3;
 
@@ -405,11 +405,12 @@ bool __not_in_flash_func(hasBluetoothRawPacketCanSend)() {
         return true;
     }
 
-    const uint hapticCount = queue_get_level(&bluetoothPacket.subPacketHapticQueue);
-    const uint audioCount = queue_get_level(&bluetoothPacket.subPacketAudioQueue);
     const uint controlCount = queue_get_level(&bluetoothPacket.subPacketControlQueue);
 
     if (config.audioActive) {
+        const uint hapticCount = queue_get_level(&bluetoothPacket.subPacketHapticQueue);
+        const uint audioCount = queue_get_level(&bluetoothPacket.subPacketAudioQueue);
+
         if (config.enableSendDoubleDataPacket) {
             if (hapticCount >= 2 && audioCount >= 2) {
                 return true;
@@ -427,11 +428,7 @@ bool __not_in_flash_func(hasBluetoothRawPacketCanSend)() {
         return false;
     }
 
-    if (bluetoothPacket.needSendAudioSetupNow) {
-        return true;
-    }
-
-    return (hapticCount + controlCount + audioCount) > 0;
+    return bluetoothPacket.needSendAudioSetupNow || controlCount > 0;
 }
 
 // Sub-Packet  0x11: AUDIO_SETUP（音频配置帧） （共 9 字节）
@@ -595,24 +592,30 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
     size_t pktSize = 0;
     bool haveAudioSetup = false;
     bool sendDoubleDataPacket = false;
+    bool haveHapticAudioDataCanSend = false;
+    bool haveAudioSetupDataCanSend = false;
 
     // 最大size能够支持 bluetoothRawPacketDataSize0x39 -> 548
     // 最大的情况: 1. 两个音频包，两个haptic包，一个audioSetup包
     //           2. 一个音频包，一个haptic包，一个control包 + 一个audioSetup包
 
-    if (!bluetoothPacket.needSendControlNow) {
-        if (controlCount == 0) {
-            if (config.enableSendDoubleDataPacket && config.audioActive) {
-                if (hapticCount < 2 || audioCount < 2) {
-                    return nullptr;
-                }
+    if (config.audioActive) {
+        if (config.enableSendDoubleDataPacket) {
+            if (hapticCount >= 2 && audioCount >= 2) {
+                haveHapticAudioDataCanSend = true;
                 sendDoubleDataPacket = true;
-            } else {
-                if (hapticCount == 0 || audioCount == 0) {
-                    return nullptr;
-                }
+            }
+        } else {
+            if (hapticCount > 0 && audioCount > 0) {
+                haveHapticAudioDataCanSend = true;
             }
         }
+    } else {
+        haveAudioSetupDataCanSend = bluetoothPacket.needSendAudioSetupNow;
+    }
+
+    if (!haveHapticAudioDataCanSend && controlCount == 0 && !haveAudioSetupDataCanSend) {
+        return nullptr;
     }
 
     // hapticData
@@ -669,7 +672,7 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
         }
     }
 
-    if (bluetoothPacket.needSendAudioSetupNow && !haveAudioSetup) {
+    if (bluetoothPacket.needSendAudioSetupNow && !config.audioActive && !haveAudioSetup) {
         pktSize += subPacketHeadWithLengthSize;
         pktSize += subPacketAudioSetupSize;
         // 8

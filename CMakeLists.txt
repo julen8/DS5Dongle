@@ -159,7 +159,7 @@ target_compile_options(ds5-bridge PRIVATE -fsigned-char -Wall -O3 -Wdouble-promo
 target_compile_options(opus PRIVATE -O3 -mfloat-abi=softfp)
 
 
-set(SYS_CLOCK_KHZ_VALUE 200000)
+set(SYS_CLOCK_KHZ_VALUE 220000)
 
 
 # CYW43 PIO-SPI clock divider is derived from SYS_CLOCK so the effective PIO clock
@@ -185,6 +185,11 @@ target_compile_definitions(ds5-bridge PRIVATE
         ENABLE_LOG=${ENABLE_LOG_VALUE}
         CYW43_LWIP=0
         PICO_FLASH_ASSUME_CORE1_SAFE=0
+        # 调试串口波特率提到 3000000，缩短每行日志的阻塞时间
+        # 注意：TinyUSB BSP 的 board_init() 用 stdio_uart_init_full(uart, CFG_BOARD_UART_BAUDRATE, ...)
+        # 初始化 UART，会覆盖 PICO_DEFAULT_UART_BAUD_RATE，因此这里必须同时定义 CFG_BOARD_UART_BAUDRATE。
+        PICO_DEFAULT_UART_BAUD_RATE=3000000
+        CFG_BOARD_UART_BAUDRATE=3000000
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_INT_VALUE}
         CYW43_PIO_CLOCK_DIV_FRAC8=${CYW43_PIO_CLOCK_DIV_FRAC8_VALUE}
