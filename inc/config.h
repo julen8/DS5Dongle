@@ -4,7 +4,6 @@
 
 struct ConfigType {
     float microphoneGain;
-    bool enableSendDoubleDataPacket;  // 启用一个bt包包含两个音频和触摸反馈子包
     bool disableMic;                  // disable mic
     volatile bool plugHeadset;        // plug headset
     volatile bool isDse;              // dse
@@ -27,7 +26,6 @@ struct ConfigType {
 #define CONFIG_DEFAULTS                            \
     {                                              \
         .microphoneGain = 1.4F,                    \
-        .enableSendDoubleDataPacket = true,        \
         .disableMic = false,                       \
         .plugHeadset = false,                      \
         .isDse = false,                            \

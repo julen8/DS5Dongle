@@ -46,7 +46,8 @@ constexpr int hapticInSampleRate = 48000;           // 触觉反馈重采样输�
 constexpr int hapticOutSampleRate = 3000;           // 触觉反馈重采样输出的采样率
 constexpr int audioResamplerOutToOpusInCount = 16;  // 需要把 audioResamplerOutputFrames 的数据累积到 audioResamplerOutToOpusInCount 个才进行一次 opus 编码
 constexpr int audioOpusInFrames = 480;              // opus编码每次输入的帧数，固定为480，不能修改
-constexpr int micChannels = 1;                      // 从ds5收到的麦克风数据的声道数量
+constexpr int micInChannels = 1;                    // 从ds5收到的麦克风数据的声道数量
+constexpr int micOutChannels = 2;                   // 发送到PC的麦克风数据的声道数量
 constexpr int micFrames = 480;                      // 一个mic包包含的数据帧数
 constexpr int micOpusSize = 71;                     // bytes per opus-encoded mic frame from the DualSense
 constexpr int micPcmElementSize = 4;
@@ -63,7 +64,7 @@ struct MicOpusElement {
 };
 
 struct MicPcmElement {
-    int16_t data[micFrames * micChannels];
+    int16_t data[micFrames * micOutChannels];
     int frames;
     atomic_bool inuse;
 };
@@ -180,34 +181,15 @@ void __not_in_flash_func(audioLoop)() {
         // Mic playback: drain decoded mic PCM into the USB IN endpoint
         static struct MicPcmElement* pcmElement = nullptr;
         if (config.micActive && queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
-            // The controller mic is mono, but the USB descriptor presents a 2-channel
-            // mic (matching the real DS5) so Windows doesn't conflict with its cached
-            // DS5 audio format. Duplicate each mono sample into L and R.
-            static int16_t micStereo[micFrames * 2];
-            float valFloat = 0.0F;
-            int16_t valInt16 = 0;
-            for (int i = 0; i < pcmElement->frames; i++) {
-                valFloat = config.microphoneGain * (float)pcmElement->data[i];
-                if (valFloat > 32767.0F) {
-                    valInt16 = 32767;
-                } else if (valFloat < -32768.0F) {
-                    valInt16 = -32768;
-                } else {
-                    valInt16 = (int16_t)valFloat;
-                }
-
-                micStereo[2 * i] = valInt16;
-                micStereo[(2 * i) + 1] = valInt16;
-            }
-            const uint16_t stereoLen = (uint16_t)(pcmElement->frames * 2 * sizeof(int16_t));
+            const uint16_t micPcmSize = (uint16_t)(pcmElement->frames * micOutChannels * sizeof(int16_t));
+            uint16_t written = tud_audio_write(pcmElement->data, micPcmSize);
             freeMicPcmElement(pcmElement);
-            uint16_t written = tud_audio_write(micStereo, stereoLen);
-            if (written != stereoLen) {
+            if (written != micPcmSize) {
                 // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
                 // interface (the common case -- most games never do) tud_audio_write
                 // short-writes every frame, so an unconditional log would flood
                 // core0's hot path with the newlib formatting chain.
-                LOGE("[Audio] Warning: USB mic FIFO wrote %u/%u bytes", written, stereoLen);
+                LOGE("[Audio] Warning: USB mic FIFO wrote %u/%u bytes", written, micPcmSize);
             }
         }
     }
@@ -412,7 +394,8 @@ static void __not_in_flash_func(micProc)() {
         return;
     }
 
-    pcmElement->frames = opus_decode(audio.decoder, opusElement->data, micOpusSize, pcmElement->data, micFrames, false);
+    static int16_t micInPcmData[micFrames * micInChannels];
+    pcmElement->frames = opus_decode(audio.decoder, opusElement->data, micOpusSize, micInPcmData, micFrames, false);
     freeMicOpusElement(opusElement);
     if (pcmElement->frames <= 0) {
         // Gated behind ENABLE_VERBOSE: printf pulls the newlib formatting chain
@@ -421,6 +404,23 @@ static void __not_in_flash_func(micProc)() {
         LOGE("[Audio] OpusDecoder decode failed: %d", pcmElement->frames);
         freeMicPcmElement(pcmElement);
         return;
+    }
+
+    // 把单声道数据复制成双声道数据
+    float valFloat = 0.0F;
+    int16_t valInt16 = 0;
+    for (int i = 0; i < pcmElement->frames; i++) {
+        valFloat = config.microphoneGain * (float)micInPcmData[i];
+        if (valFloat > 32767.0F) {
+            valInt16 = 32767;
+        } else if (valFloat < -32768.0F) {
+            valInt16 = -32768;
+        } else {
+            valInt16 = (int16_t)valFloat;
+        }
+
+        pcmElement->data[2 * i] = valInt16;
+        pcmElement->data[(2 * i) + 1] = valInt16;
     }
 
     if (!queue_try_add(&audio.micPcmFifo, (void*)&pcmElement)) {
@@ -517,7 +517,7 @@ bool audioInit() {
     // 禁用帧间预测
     opus_encoder_ctl(audio.encoder, OPUS_SET_PREDICTION_DISABLED(1));
 
-    audio.decoder = opus_decoder_create(48000, micChannels, &error);
+    audio.decoder = opus_decoder_create(48000, micInChannels, &error);
     if (error != 0) {
         LOGE("[Audio] OpusDecoder create failed");
         return false;
