@@ -1,18 +1,20 @@
 #pragma once
 
+#include <stdatomic.h>
 #include <stdint.h>
+
+static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "cross-core audio flags require lock-free atomic_bool");
 
 struct ConfigType {
     float microphoneGain;
-    bool disableMic;                  // disable mic
-    volatile bool plugHeadset;        // plug headset
-    volatile bool isDse;              // dse
-    volatile bool audioActive;        // audio active
-    volatile bool micActive;          // mic active
-    uint8_t inactiveTime;             // [10,60] min
-    uint8_t pollingRateMode;          // 0: 250Hz, 1: 500Hz, 2: 1000Hz
-    uint8_t audioBufferLength;        // [16,128]
-    uint8_t controllerMode;           // 0: DS5, 1: DSE, 2: Auto
+    volatile bool plugHeadset;  // plug headset
+    volatile bool isDse;        // dse
+    atomic_bool audioActive;    // audio active, shared between cores
+    atomic_bool micActive;      // mic active, shared between cores
+    uint8_t inactiveTime;       // [10,60] min
+    uint8_t pollingRateMode;    // 0: 250Hz, 1: 500Hz, 2: 1000Hz
+    uint8_t audioBufferLength;  // [16,128]
+    uint8_t controllerMode;     // 0: DS5, 1: DSE, 2: Auto
     struct {
         uint8_t speaker;
         uint8_t microphone;
@@ -26,7 +28,6 @@ struct ConfigType {
 #define CONFIG_DEFAULTS                            \
     {                                              \
         .microphoneGain = 1.4F,                    \
-        .disableMic = false,                       \
         .plugHeadset = false,                      \
         .isDse = false,                            \
         .audioActive = false,                      \

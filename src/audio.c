@@ -177,25 +177,41 @@ static inline void cleanRemainingData() {
 }
 
 void __not_in_flash_func(audioLoop)() {
-    if (!config.disableMic) {
-        // Mic playback: drain decoded mic PCM into the USB IN endpoint
-        static struct MicPcmElement* pcmElement = nullptr;
-        if (config.micActive && queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
-            const uint16_t micPcmSize = (uint16_t)(pcmElement->frames * micOutChannels * sizeof(int16_t));
-            uint16_t written = tud_audio_write(pcmElement->data, micPcmSize);
+    static struct MicPcmElement* pcmElement = nullptr;
+    if (atomic_load_explicit(&config.micActive, memory_order_acquire)) {
+        const tu_fifo_t* txFifo = tud_audio_get_ep_in_ff();
+
+        if (txFifo == nullptr) {
+            goto MIC_OUT;
+        }
+
+        if (pcmElement == nullptr && !queue_try_remove(&audio.micPcmFifo, (void*)&pcmElement)) {
+            goto MIC_OUT;
+        }
+
+        if (pcmElement == nullptr) {
+            goto MIC_OUT;
+        }
+
+        const size_t dataSize = pcmElement->frames * micOutChannels * sizeof(pcmElement->data[0]);
+        if (tu_fifo_remaining(txFifo) < dataSize) {
+            goto MIC_OUT;
+        }
+
+        tud_audio_write(pcmElement->data, dataSize);
+        freeMicPcmElement(pcmElement);
+        pcmElement = nullptr;
+
+    MIC_OUT:
+    } else {
+        if (pcmElement != nullptr) {
             freeMicPcmElement(pcmElement);
-            if (written != micPcmSize) {
-                // Gated behind ENABLE_VERBOSE: when the host has not opened the mic
-                // interface (the common case -- most games never do) tud_audio_write
-                // short-writes every frame, so an unconditional log would flood
-                // core0's hot path with the newlib formatting chain.
-                LOGE("[Audio] Warning: USB mic FIFO wrote %u/%u bytes", written, micPcmSize);
-            }
+            pcmElement = nullptr;
         }
     }
 
     if (tud_audio_available() == 0) {
-        if (!config.audioActive) {
+        if (!atomic_load_explicit(&config.audioActive, memory_order_acquire)) {
             if (audio.needClean) {
                 audio.needClean = false;
                 audio.needSendFirstMuteOpusPackage = true;
@@ -242,7 +258,9 @@ void __not_in_flash_func(audioLoop)() {
             if (audio.audioBufPos == audioResamplerInputFrames * audioChannels) {
                 audio.audioBufPos = 0;
 
-                if (!queue_try_add(&audio.audioPcmFifo, &audio.currentAudioRawElement)) {
+                if (queue_try_add(&audio.audioPcmFifo, (void*)&audio.currentAudioRawElement)) {
+                    __sev();
+                } else {
                     LOGW("audio_fifo add failed");
                     freeAudioRawElement(audio.currentAudioRawElement);
                 }
@@ -302,7 +320,7 @@ static inline void __not_in_flash_func(speakerProc)() {
     static bool needReset = true;
     struct AudioRawElement* audioRawElement = nullptr;
 
-    if (!config.audioActive) {
+    if (!atomic_load_explicit(&config.audioActive, memory_order_acquire)) {
         while (queue_try_remove(&audio.audioPcmFifo, (void*)&audioRawElement)) {
             if (audioRawElement != nullptr) {
                 freeAudioRawElement(audioRawElement);
@@ -350,7 +368,7 @@ static inline void __not_in_flash_func(speakerProc)() {
         freeSubPacket(audioOut, subPacketTypeAudio);
         return;
     }
-    if (config.audioActive) {
+    if (atomic_load_explicit(&config.audioActive, memory_order_acquire)) {
         if (encodedBytes < subPacketAudioSize) {
             memset(audioOut + encodedBytes, 0, subPacketAudioSize - encodedBytes);
         }
@@ -365,7 +383,7 @@ static inline void __not_in_flash_func(speakerProc)() {
 static void __not_in_flash_func(micProc)() {
     struct MicOpusElement* opusElement = nullptr;
 
-    if (!config.micActive) {
+    if (!atomic_load_explicit(&config.micActive, memory_order_acquire)) {
         // If the mic is disabled, drain the micOpusFifo to avoid memory leaks.
         while (queue_try_remove(&audio.micOpusFifo, (void*)&opusElement)) {
             if (opusElement != nullptr) {
@@ -405,6 +423,9 @@ static void __not_in_flash_func(micProc)() {
         freeMicPcmElement(pcmElement);
         return;
     }
+    if (pcmElement->frames != micFrames) {
+        LOGW("[Audio] OpusDecoder decode frames:%d != micFrames:%d", pcmElement->frames, micFrames);
+    }
 
     // 把单声道数据复制成双声道数据
     float valFloat = 0.0F;
@@ -436,10 +457,12 @@ void __not_in_flash_func(core1Entry)() {
     flash_safe_execute_core_init();
 
     for (;;) {
-        speakerProc();
-        if (!config.disableMic) {
-            micProc();
+        if (queue_get_level(&audio.audioPcmFifo) == 0 && queue_get_level(&audio.micOpusFifo) == 0) {
+            __wfe();
         }
+
+        speakerProc();
+        micProc();
     }
 }
 
@@ -459,7 +482,9 @@ void __not_in_flash_func(micAddOpusQueue)(uint8_t* data, uint16_t len) {
 
     memcpy(opusElement->data, data, micOpusSize);
 
-    if (!queue_try_add(&audio.micOpusFifo, (void*)&opusElement)) {
+    if (queue_try_add(&audio.micOpusFifo, (void*)&opusElement)) {
+        __sev();
+    } else {
         freeMicOpusElement(opusElement);
         LOGE("micOpusFifo: queue add failed");
     }

@@ -60,7 +60,7 @@ int main() {
 
     for (;;) {
         watchdog_update();
-        if (config.audioActive && config.pollingRateMode == 2) {
+        if (atomic_load_explicit(&config.audioActive, memory_order_relaxed) && config.pollingRateMode == 2) {
             // 1000Hz模式下，此时蓝牙的发包会比较费时，所以在这里多发送一次usb数据，保证usb的回报率能保持到1000Hz
             tud_task();
             usbInterruptLoop();

@@ -214,12 +214,16 @@ bool __not_in_flash_func(tud_audio_set_itf_cb)(uint8_t rhport, tusb_control_requ
     bool active = (alt != 0);
 
     if (itf == 1) {
-        config.audioActive = active;
+        atomic_store_explicit(&config.audioActive, active, memory_order_release);
+        __dmb();
+        __sev();
         LOGI("[AUDIO] Set interface Speaker to alternate setting %d", alt);
     } else if (itf == 2) {  // ITF_NUM_AUDIO_STREAMING_IN (microphone)
         LOGI("[AUDIO] Set interface Microphone to alternate setting %d", alt);
-        if (config.micActive != active) {
-            config.micActive = active;
+        if (atomic_load_explicit(&config.micActive, memory_order_relaxed) != active) {
+            atomic_store_explicit(&config.micActive, active, memory_order_release);
+            __dmb();
+            __sev();
             needSendAudioSetup();
         }
     }

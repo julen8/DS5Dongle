@@ -410,7 +410,7 @@ bool __not_in_flash_func(hasBluetoothRawPacketCanSend)() {
         return true;
     }
 
-    if (config.audioActive) {
+    if (atomic_load_explicit(&config.audioActive, memory_order_relaxed)) {
         const uint hapticCount = queue_get_level(&bluetoothPacket.subPacketHapticQueue);
         const uint audioCount = queue_get_level(&bluetoothPacket.subPacketAudioQueue);
 
@@ -439,12 +439,12 @@ static inline int __not_in_flash_func(setAudioSetupSubPacket)(uint8_t* buffer, b
     buffer[1] = subPacketAudioSetupSize;
     // sub packet content
 
-    buffer[2] = (config.micActive && !config.disableMic) ? 0b01111111 : 0b01111110;  // AudioFlags: 启用全部音频路由
-    buffer[3] = 0;                                                                   // 保留
-    buffer[4] = 0;                                                                   // 保留
-    buffer[5] = 0;                                                                   // 保留
-    buffer[6] = config.audioBufferLength;                                            // 可能是缓存大小，影响延迟
-    buffer[7] = bluetoothPacket.packetCounter += sendDoubleDataPacket ? 2 : 1;       // 帧计数器，单调递增
+    buffer[2] = atomic_load_explicit(&config.micActive, memory_order_relaxed) ? 0b01111111 : 0b01111110;  // AudioFlags: 启用全部音频路由
+    buffer[3] = 0;                                                                                        // 保留
+    buffer[4] = 0;                                                                                        // 保留
+    buffer[5] = 0;                                                                                        // 保留
+    buffer[6] = config.audioBufferLength;                                                                 // 可能是缓存大小，影响延迟
+    buffer[7] = bluetoothPacket.packetCounter += sendDoubleDataPacket ? 2 : 1;                            // 帧计数器，单调递增
 
     static_assert(subPacketHeadWithLengthSize + subPacketAudioSetupSize == 8, "audio setup sub packet size should be 8");
     return subPacketHeadWithLengthSize + subPacketAudioSetupSize;
@@ -550,7 +550,7 @@ static inline void __not_in_flash_func(packed)(const uint8_t* controlData, uint8
         }
     }
 
-    if (bluetoothPacket.needSendAudioSetupNow && !config.audioActive) {
+    if (bluetoothPacket.needSendAudioSetupNow && !atomic_load_explicit(&config.audioActive, memory_order_relaxed)) {
         bluetoothPacket.needSendAudioSetupNow = false;
         offset += setAudioSetupSubPacket(pkt->data + offset, false);
     }
@@ -596,7 +596,7 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
     // 最大的情况: 1. 两个音频包，两个haptic包，一个audioSetup包 (当前使用这个逻辑)
     //           2. 一个音频包，一个haptic包，一个control包 + 一个audioSetup包 (未使用这个模式，因为这样蓝牙发包的频率会很高，而且control包总是需要等待)
 
-    if (config.audioActive) {
+    if (atomic_load_explicit(&config.audioActive, memory_order_relaxed)) {
         if (hapticCount >= 2 && audioCount >= 2) {
             haveHapticAudioDataCanSend = true;
         }
@@ -654,7 +654,7 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
             // 64
         }
 
-        if (bluetoothPacket.needSendAudioSetupNow && !config.audioActive) {
+        if (bluetoothPacket.needSendAudioSetupNow && !atomic_load_explicit(&config.audioActive, memory_order_relaxed)) {
             pktSize += subPacketHeadWithLengthSize;
             pktSize += subPacketAudioSetupSize;
             // 8
