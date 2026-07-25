@@ -92,7 +92,7 @@ relocate_to_ram(lib/btstack/src/l2cap.c.o
         ".text.l2cap_acl_handler=.time_critical.l2cap_acl_handler"
         "Phase B.2: l2cap.c l2cap_acl_handler -> RAM")
 relocate_to_ram(lib/tinyusb/src/common/tusb_fifo.c.o
-        ".text.tu_fifo_read=.time_critical.tu_fifo_read|.text.tu_fifo_read_n=.time_critical.tu_fifo_read_n|.text.tu_fifo_write=.time_critical.tu_fifo_write|.text.tu_fifo_write_n=.time_critical.tu_fifo_write_n|.text.tu_fifo_count=.time_critical.tu_fifo_count"
+        ".text.tu_fifo_read=.time_critical.tu_fifo_read|.text.tu_fifo_read_n_access_mode=.time_critical.tu_fifo_read_n_access_mode|.text.tu_fifo_write=.time_critical.tu_fifo_write|.text.tu_fifo_write_n_access_mode=.time_critical.tu_fifo_write_n_access_mode"
         "Phase B.2: tusb_fifo.c data path -> RAM")
 relocate_to_ram(src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.c.o
         ".text.cyw43_spi_transfer=.time_critical.cyw43_spi_transfer|.text.cyw43_read_bytes=.time_critical.cyw43_read_bytes|.text.cyw43_write_bytes=.time_critical.cyw43_write_bytes|.text.cyw43_read_reg_u32=.time_critical.cyw43_read_reg_u32|.text.cyw43_read_reg_u16=.time_critical.cyw43_read_reg_u16|.text.cyw43_read_reg_u8=.time_critical.cyw43_read_reg_u8|.text.cyw43_write_reg_u32=.time_critical.cyw43_write_reg_u32|.text.cyw43_write_reg_u16=.time_critical.cyw43_write_reg_u16|.text.cyw43_write_reg_u8=.time_critical.cyw43_write_reg_u8|.text.read_reg_u32_swap=.time_critical.read_reg_u32_swap|.text.write_reg_u32_swap=.time_critical.write_reg_u32_swap|.text.ns_delay.constprop.0=.time_critical.cyw43_ns_delay"
@@ -114,8 +114,8 @@ relocate_to_ram(lib/btstack/src/l2cap.c.o
         ".text.l2cap_run=.time_critical.l2cap_run|.text.l2cap_send=.time_critical.l2cap_send|.text.l2cap_send_prepared=.time_critical.l2cap_send_prepared|.text.l2cap_notify_channel_can_send=.time_critical.l2cap_notify_channel_can_send|.text.l2cap_request_can_send_now_event=.time_critical.l2cap_request_can_send_now_event"
         "Phase B.3: l2cap.c TX pump + sends -> RAM")
 relocate_to_ram(lib/btstack/src/btstack_linked_list.c.o
-    ".text.btstack_linked_list_iterator_init=.time_critical.btstack_linked_list_iterator_init|.text.btstack_linked_list_iterator_has_next=.time_critical.btstack_linked_list_iterator_has_next|.text.btstack_linked_list_iterator_next=.time_critical.btstack_linked_list_iterator_next"
-    "Phase B.3: btstack linked-list iterators -> RAM")
+        ".text.btstack_linked_list_iterator_init=.time_critical.btstack_linked_list_iterator_init|.text.btstack_linked_list_iterator_has_next=.time_critical.btstack_linked_list_iterator_has_next|.text.btstack_linked_list_iterator_next=.time_critical.btstack_linked_list_iterator_next"
+        "Phase B.3: btstack linked-list iterators -> RAM")
 relocate_to_ram(lib/cyw43-driver/src/cyw43_ll.c.o
         ".text.cyw43_ll_write_backplane_mem=.time_critical.cyw43_ll_write_backplane_mem|.text.cyw43_ll_read_backplane_mem=.time_critical.cyw43_ll_read_backplane_mem|.text.cyw43_write_backplane=.time_critical.cyw43_write_backplane|.text.cyw43_read_backplane.constprop.0=.time_critical.cyw43_read_backplane"
         "Phase B.3: cyw43 backplane accessors -> RAM")
@@ -146,12 +146,12 @@ relocate_to_ram(lib/btstack/src/btstack_run_loop.c.o
 
 option(ENABLE_LOG "Enable Log" OFF)
 if (ENABLE_LOG)
-        pico_enable_stdio_uart(ds5-bridge 1)
-        set(ENABLE_LOG_VALUE 1)
-else()
-        pico_enable_stdio_uart(ds5-bridge 0)
-        set(ENABLE_LOG_VALUE 0)
-endif()
+    pico_enable_stdio_uart(ds5-bridge 1)
+    set(ENABLE_LOG_VALUE 1)
+else ()
+    pico_enable_stdio_uart(ds5-bridge 0)
+    set(ENABLE_LOG_VALUE 0)
+endif ()
 
 pico_enable_stdio_usb(ds5-bridge 0)
 
@@ -176,9 +176,9 @@ math(EXPR CYW43_PIO_CLOCK_DIV_FRAC8_VALUE
         "(${_CYW43_PIO_CLOCK_DIV_REM} * 256 + ${CYW43_PIO_TARGET_KHZ_VALUE} / 2) / ${CYW43_PIO_TARGET_KHZ_VALUE}")
 # Carry over if rounding pushed frac8 to a full step (256/256 == +1 on the int part).
 if (CYW43_PIO_CLOCK_DIV_FRAC8_VALUE GREATER_EQUAL 256)
-        math(EXPR CYW43_PIO_CLOCK_DIV_INT_VALUE "${CYW43_PIO_CLOCK_DIV_INT_VALUE} + 1")
-        set(CYW43_PIO_CLOCK_DIV_FRAC8_VALUE 0)
-endif()
+    math(EXPR CYW43_PIO_CLOCK_DIV_INT_VALUE "${CYW43_PIO_CLOCK_DIV_INT_VALUE} + 1")
+    set(CYW43_PIO_CLOCK_DIV_FRAC8_VALUE 0)
+endif ()
 message(STATUS "CYW43 PIO clock divider: ${CYW43_PIO_CLOCK_DIV_INT_VALUE} + ${CYW43_PIO_CLOCK_DIV_FRAC8_VALUE}/256 (SYS ${SYS_CLOCK_KHZ_VALUE} kHz -> ~${CYW43_PIO_TARGET_KHZ_VALUE} kHz)")
 
 target_compile_definitions(ds5-bridge PRIVATE
@@ -196,7 +196,6 @@ target_compile_definitions(ds5-bridge PRIVATE
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-
 
 
 target_link_libraries(ds5-bridge

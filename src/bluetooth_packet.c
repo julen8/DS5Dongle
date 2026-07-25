@@ -673,21 +673,19 @@ uint8_t* __not_in_flash_func(getBluetoothRawPacket)(size_t* size) {
     // 7
 
     struct BluetoothRawPacket* pkt = newBluetoothRawPacket(pktSize);
-    if (pkt == nullptr) {
-        freeSubPacket(hapticData[0], subPacketTypeHaptic);
-        freeSubPacket(hapticData[1], subPacketTypeHaptic);
-        freeSubPacket(audioData[0], subPacketTypeAudio);
-        freeSubPacket(audioData[1], subPacketTypeAudio);
-        freeSubPacket(controlData, subPacketTypeControl);
-        return nullptr;
+    if (pkt != nullptr) {
+        packed(controlData, hapticData, audioData, pkt);
     }
 
-    packed(controlData, hapticData, audioData, pkt);
     freeSubPacket(hapticData[0], subPacketTypeHaptic);
     freeSubPacket(hapticData[1], subPacketTypeHaptic);
     freeSubPacket(audioData[0], subPacketTypeAudio);
     freeSubPacket(audioData[1], subPacketTypeAudio);
     freeSubPacket(controlData, subPacketTypeControl);
+
+    if (pkt == nullptr) {
+        return nullptr;
+    }
 
     *size = pkt->size;
     return pkt->data;
