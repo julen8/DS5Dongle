@@ -414,11 +414,7 @@ bool __not_in_flash_func(hasBluetoothRawPacketCanSend)() {
         const uint hapticCount = queue_get_level(&bluetoothPacket.subPacketHapticQueue);
         const uint audioCount = queue_get_level(&bluetoothPacket.subPacketAudioQueue);
 
-        if (hapticCount >= 2 && audioCount >= 2) {
-            return true;
-        }
-
-        return false;
+        return (hapticCount >= 2 && audioCount >= 2);
     }
 
     return bluetoothPacket.needSendAudioSetupNow;

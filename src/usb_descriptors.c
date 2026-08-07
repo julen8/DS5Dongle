@@ -27,11 +27,8 @@
 #include "config.h"
 #include "tusb.h"
 
-bool ds_mode() {
-    if (config.controllerMode == 2) {
-        return !config.isDse;
-    }
-    return config.controllerMode == 0;
+static inline bool ds_mode() {
+    return true;
 }
 
 enum {

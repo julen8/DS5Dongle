@@ -44,7 +44,6 @@ typedef struct {
     hci_con_handle_t aclHandle;
     uint16_t hidControlCid;
     uint16_t hidInterruptCid;
-    bool checkDse;
     bool requestHasBeenSent;
     bool inquiring;
     absolute_time_t inactiveTime;  // 手柄长时间静默
@@ -109,6 +108,7 @@ static inline bool btDisconnect() {
     }
 
     // 0x13 = 远端用户终止连接
+    LOGI("[HCI] Disconnect requested handle=0x%04X reason=0x13", bt.aclHandle);
     hci_send_cmd(&hci_disconnect, bt.aclHandle, 0x13);
     return true;
 }
@@ -305,8 +305,6 @@ static inline void hciHandleEncryptionChange(uint8_t* packet) {
         if (bt.newPair) {
             if (bt.hidControlCid == 0) {
                 l2cap_create_channel(l2capPacketHandler, bt.currentDeviceAddr, PSM_HID_CONTROL, MTU_CONTROL, &bt.hidControlCid);
-            } else if (bt.hidInterruptCid == 0) {
-                l2cap_create_channel(l2capPacketHandler, bt.currentDeviceAddr, PSM_HID_INTERRUPT, MTU_INTERRUPT, &bt.hidInterruptCid);
             }
         }
     }
@@ -316,9 +314,12 @@ static inline void hciHandleConnectionRequest(uint8_t* packet) {
     bd_addr_t addr;
     hci_event_connection_request_get_bd_addr(packet, addr);
     const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
+    // 这个是按 PS 键重连的时候才会触发
     LOGI("[HCI] Incoming ACL request from %s cod=0x%06x", bd_addr_to_str(addr), (unsigned int)cod);
     if (isGamepadCod(cod)) {
         bd_addr_copy(bt.currentDeviceAddr, addr);
+        // 这里的 stop 触发条件是：刚开机时，pico 处于 inquiry 模式，然后 DS5 通过 PS 键重连
+        // 如果在连接上以后没有停止 inquiry，会导致回报率很低
         gap_inquiry_stop();
         hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
     }
@@ -425,42 +426,44 @@ static inline void __not_in_flash_func(l2capHandleInterruptDataPacket)(uint8_t* 
 }
 
 static inline void __not_in_flash_func(l2capHandleControlDataPacket)(uint8_t* packet, const uint16_t size) {
-    if (size < 1) {
+    if (size < 2) {
         LOGW("[L2CAP] HID Control data empty");
         return;
     }
-    if (bt.checkDse) {
-        // checkDse 由 initFeature()（请求 0x70 report）置位，
-        // 在首个匹配的 control 响应中消费。
-        // packet[0] == 0x02 只需 1 字节
-        if (packet[0] == 0x02) {
-            LOGI("Connected DS5 Controller");
-            bt.checkDse = false;
-            config.isDse = false;
-            tud_connect();
-        } else if (size >= 2 && packet[0] == 0xA3 && packet[1] == 0x70) {
-            // 需要 2 字节才能读 packet[1]
+    if (packet[0] != 0xA3) {
+        return;
+    }
+
+    const uint8_t reportId = packet[1];
+    // 存 packet[1..size-1]（含 reportId），截断到 featureDataMax
+    uint16_t storeLen = size - 1;
+    if (storeLen > featureDataMax) {
+        LOGW("[L2CAP] Feature Report 0x%02X too long: %u, truncate to: %u", reportId, storeLen, featureDataMax);
+        storeLen = featureDataMax;
+    }
+
+    struct FeatureSlot* slot = allocFeatureSlot(reportId);
+    if (slot != nullptr) {
+        memcpy(slot->data, packet + 1, storeLen);
+        slot->len = storeLen;
+        slot->valid = true;
+    } else {
+        LOGW("[L2CAP] Feature slot full, drop Report 0x%02X", reportId);
+    }
+
+    if (reportId == 0x20) {
+        if (size > 23 && packet[23] == 0x44) {
             LOGI("Connected DSE Controller");
-            bt.checkDse = false;
-            config.isDse = true;
+        } else {
+            LOGI("Connected DS5 Controller");
+        }
+
+        if (!tud_suspended()) {
             tud_connect();
         }
     }
-    // 存储 Feature Report：packet[1] 是 reportId，需要 size >= 2
-    if (size >= 2 && packet[0] == 0xA3) {
-        const uint8_t reportId = packet[1];
-        // 存 packet[1..size-1]（含 reportId），截断到 featureDataMax
-        const uint8_t storeLen = (uint8_t)MIN((size - 1), (uint16_t)featureDataMax);
-        struct FeatureSlot* slot = allocFeatureSlot(reportId);
-        if (slot != nullptr) {
-            memcpy(slot->data, packet + 1, storeLen);
-            slot->len = storeLen;
-            slot->valid = true;
-        } else {
-            LOGW("[L2CAP] Feature slot full, drop Report 0x%02X", reportId);
-        }
-        LOGD("[L2CAP] Stored Feature Report 0x%02X, len=%u", reportId, storeLen - 1);
-    }
+
+    LOGD("[L2CAP] Stored Feature Report 0x%02X, len=%u", reportId, storeLen - 1);
 
     LOGD("[L2CAP] HID Control data len=%u", size);
 #if ENABLE_DEBUG
@@ -495,6 +498,10 @@ static inline void __not_in_flash_func(l2capHandleChannelOpened)(uint8_t* packet
 
             [[maybe_unused]] const uint16_t mtu = l2cap_get_remote_mtu_for_local_cid(bt.hidControlCid);
             LOGI("[L2CAP] Remote Control MTU: %d", mtu);
+            if (bt.newPair) {
+                printf("[L2CAP] Opening interrupt channel\n");
+                l2cap_create_channel(l2capPacketHandler, bt.currentDeviceAddr, PSM_HID_INTERRUPT, MTU_INTERRUPT, &bt.hidInterruptCid);
+            }
         } else if (psm == PSM_HID_INTERRUPT) {
             LOGI("[L2CAP] HID Interrupt opened cid=0x%04X", localCid);
             bt.hidInterruptCid = localCid;
@@ -505,6 +512,13 @@ static inline void __not_in_flash_func(l2capHandleChannelOpened)(uint8_t* packet
             initFeature();
             // 初始化手柄状态
             setControlPacket(ds5ControlInitPacket.data, ds5ControlPacketSize);
+
+            // Re-arm controller mic streaming for the new link. The 0x32
+            // mic-status packet is otherwise only sent when the host opens
+            // or closes the USB mic interface, so a controller that
+            // reconnects while the host still holds that interface open
+            // never gets told to stream and the mic stays silent.
+            needSendAudioSetup();
 
             [[maybe_unused]] const uint16_t mtu = l2cap_get_remote_mtu_for_local_cid(bt.hidInterruptCid);
             LOGI("[L2CAP] Remote Interrupt MTU: %d", mtu);
@@ -666,8 +680,4 @@ void initFeature() {
     getFeatureData(0x22, nullptr, 0);
     getFeatureData(0x05, nullptr, 0);
     getFeatureData(0x81, nullptr, 0);
-    // 当 0x70 report 响应到达时，checkDse 会在 l2capHandleControlDataPacket()
-    // 中被消费：DS5 路径清为 false；DSE 路径会设置 config.isDse。
-    bt.checkDse = true;
-    getFeatureData(0x70, nullptr, 0);
 }
