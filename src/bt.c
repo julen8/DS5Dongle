@@ -228,9 +228,13 @@ static inline void hciHandleCommandStatus(uint8_t* packet) {
 }
 
 static inline void hciHandleCommandComplete(uint8_t* packet) {
+#if ENABLE_INFO
     [[maybe_unused]] const uint8_t status = hci_event_command_complete_get_return_parameters(packet)[0];
-    [[maybe_unused]] const uint16_t opcode = hci_event_command_complete_get_command_opcode(packet);
-    LOGI("[HCI] CmdComplete (0x%04X) status=0x%02X", opcode, status);
+    if (status != ERROR_CODE_SUCCESS) {
+        [[maybe_unused]] const uint16_t opcode = hci_event_command_complete_get_command_opcode(packet);
+        LOGI("[HCI] CmdComplete (0x%04X) status=0x%02X", opcode, status);
+    }
+#endif
 }
 
 static inline void hciHandleConnectionComplete(uint8_t* packet) {
